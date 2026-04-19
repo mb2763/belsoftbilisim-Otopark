@@ -1,0 +1,62 @@
+<Window x:Class="Otopark.Client.Views.AddVehicleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Yeni Arac Ekle"
+        Width="400" SizeToContent="Height"
+        MaxHeight="550"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#F5F7FB">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <Border Margin="16" Background="White" CornerRadius="12" Padding="20"
+            BorderBrush="#E6EAF2" BorderThickness="1">
+        <StackPanel>
+            <TextBlock Text="Yeni Arac Ekle" FontSize="16" FontWeight="Bold"
+                       Foreground="#1B2B4A" HorizontalAlignment="Center" Margin="0,0,0,16"/>
+
+            <!-- Plaka -->
+            <TextBlock Text="Plaka" Foreground="#6B7A99" FontSize="12" Margin="0,0,0,4"/>
+            <TextBox x:Name="TxtPlate" Height="36" Padding="8,0"
+                     VerticalContentAlignment="Center" IsReadOnly="True"
+                     Background="#F0F3F9" BorderBrush="#DDE3EE"/>
+
+            <!-- Musteri Firma -->
+            <TextBlock Text="Musteri Firma" Foreground="#6B7A99" FontSize="12" Margin="0,12,0,4"/>
+            <ComboBox x:Name="CmbCompany" Height="36"
+                      DisplayMemberPath="Title"
+                      BorderBrush="#DDE3EE" Background="#F8FAFE"/>
+
+            <!-- Arac Turu -->
+            <TextBlock Text="Arac Turu" Foreground="#6B7A99" FontSize="12" Margin="0,12,0,4"/>
+            <ComboBox x:Name="CmbVehicleType" Height="36"
+                      DisplayMemberPath="VehicleTypeName"
+                      BorderBrush="#DDE3EE" Background="#F8FAFE"/>
+
+            <!-- Tarife -->
+            <TextBlock Text="Tarife" Foreground="#6B7A99" FontSize="12" Margin="0,12,0,4"/>
+            <ComboBox x:Name="CmbTariff" Height="36"
+                      DisplayMemberPath="TariffName"
+                      BorderBrush="#DDE3EE" Background="#F8FAFE"/>
+
+            <!-- Hata -->
+            <TextBlock x:Name="TxtError" Foreground="Red" FontSize="11"
+                       TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+            <!-- Butonlar -->
+            <Grid Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Content="Iptal" Height="36" Margin="0,0,6,0"
+                        Background="#EEE" BorderBrush="#DDD"
+                        Click="Cancel_Click"/>
+                <Button Grid.Column="1" Content="Kaydet" Height="36" Margin="6,0,0,0"
+                        Background="#2B7CFF" Foreground="White" FontWeight="SemiBold"
+                        BorderThickness="0" Click="Save_Click"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+    </ScrollViewer>
+</Window>
