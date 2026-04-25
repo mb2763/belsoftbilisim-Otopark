@@ -1,13 +1,6 @@
-using Newtonsoft.Json;
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http.Headers;
-using System.Net.Http;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.IO;
 
 namespace Otopark.Client.Helpers
 {
@@ -135,79 +128,4 @@ namespace Otopark.Client.Helpers
         }
     }
 
-    internal sealed class PlateRecognizerClient
-    {
-        private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        private readonly string _token;
-
-        public PlateRecognizerClient(string token) { _token = token; }
-
-        /// <summary>
-        /// Plaka tanima yapar. regions bos birakilirsa tum bolgeler denenir (yabanci plaka dahil).
-        /// Birden fazla aday donerse IsLikelyPlate gecen en yuksek skorlu aday secilir.
-        /// </summary>
-        public async Task<PlateRecognitionResult?> RecognizeAsync(string imagePath, string? regions, CancellationToken ct)
-        {
-            if (!File.Exists(imagePath)) return null;
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.platerecognizer.com/v1/plate-reader/");
-            req.Headers.Authorization = new AuthenticationHeaderValue("Token", _token);
-
-            using var form = new MultipartFormDataContent();
-            if (!string.IsNullOrWhiteSpace(regions))
-                form.Add(new StringContent(regions), "regions");
-
-            var bytes = await File.ReadAllBytesAsync(imagePath, ct);
-            form.Add(new ByteArrayContent(bytes), "upload", Path.GetFileName(imagePath));
-
-            req.Content = form;
-
-            using var resp = await Http.SendAsync(req, ct);
-            var json = await resp.Content.ReadAsStringAsync(ct);
-            if (!resp.IsSuccessStatusCode) return null;
-
-            var parsed = JsonConvert.DeserializeObject<PlateRecognizerResponse>(json);
-            if (parsed?.results == null || parsed.results.Length == 0) return null;
-
-            // Tum sonuclar ve adaylar icinden gecerli format olan en yuksek skorluyu sec
-            (string plate, double score)? best = null;
-            foreach (var r in parsed.results)
-            {
-                if (r.candidates == null) continue;
-                foreach (var c in r.candidates)
-                {
-                    if (string.IsNullOrWhiteSpace(c.plate)) continue;
-                    var normalized = PlateRules.Normalize(c.plate);
-                    if (!PlateRules.IsLikelyPlate(normalized)) continue;
-                    if (best == null || c.score > best.Value.score)
-                        best = (normalized, c.score);
-                }
-            }
-
-            if (best == null)
-            {
-                // Format gecmeyen de olsa en yuksek skorluyu don (cagiran tarafta bir daha filtrelenir)
-                var topR = parsed.results[0];
-                if (topR.candidates != null && topR.candidates.Length > 0)
-                {
-                    var topC = topR.candidates.OrderByDescending(c => c.score).First();
-                    return new PlateRecognitionResult(topC.plate ?? "", topC.score);
-                }
-                return null;
-            }
-
-            return new PlateRecognitionResult(best.Value.plate, best.Value.score);
-        }
-
-        internal sealed class PlateRecognitionResult
-        {
-            public string Plate { get; }
-            public double Score { get; }
-            public PlateRecognitionResult(string plate, double score) { Plate = plate; Score = score; }
-        }
-
-        private sealed class PlateRecognizerResponse { public PlateRecognizerResult[]? results { get; set; } }
-        private sealed class PlateRecognizerResult { public PlateCandidate[]? candidates { get; set; } }
-        private sealed class PlateCandidate { public string? plate { get; set; } public double score { get; set; } }
-    }
 }

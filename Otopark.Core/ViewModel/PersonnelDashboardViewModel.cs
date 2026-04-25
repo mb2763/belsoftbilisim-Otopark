@@ -101,6 +101,35 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     public string[] EntryPlateSnapshotPaths { get; set; } = Array.Empty<string>();
     public string[] ExitPlateSnapshotPaths { get; set; } = Array.Empty<string>();
 
+    // Cikis panelinde giriş anı görseli
+    [ObservableProperty] private string exitEntryImagePath = "";
+
+    // Secili satir
+    [ObservableProperty] private VehicleRow? selectedVehicle;
+
+    partial void OnSelectedVehicleChanged(VehicleRow? value)
+    {
+        if (value == null) return;
+
+        // Giris panelini her zaman doldur
+        EntryDetectedPlate = value.Plate;
+        EntryCameraImagePath = value.EntryPlateImagePath;
+
+        // Cikis panelini: sadece cikis kaydi varsa
+        if (value.ExitDateTime.HasValue)
+        {
+            ExitDetectedPlate = value.Plate;
+            ExitCameraImagePath = value.ExitPlateImagePath;
+            ExitEntryImagePath = value.EntryPlateImagePath;
+        }
+        else
+        {
+            ExitDetectedPlate = "";
+            ExitCameraImagePath = "";
+            ExitEntryImagePath = "";
+        }
+    }
+
     // Popup event: plaka kayitli degilse code-behind popup acar
     // string=plate, return: true=kayit yapildi, false=iptal
     public event Func<string, LookupApiService, Task<bool>>? OnVehicleRegistrationRequired;
@@ -691,14 +720,36 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         catch { }
     }
 
-    /// <summary>
-    /// Plaka okundugunda View'in kaydettigi snapshot yollarinin ilkini dondurur (UI icin).
-    /// Dosyalar zaten kaydedilmis oldugu icin burada sadece ilk yolu donduruyoruz.
-    /// </summary>
     private string GetFirstSnapshotPath(bool isEntry)
     {
         var paths = isEntry ? EntryPlateSnapshotPaths : ExitPlateSnapshotPaths;
         return paths.Length > 0 ? paths[0] : "";
+    }
+
+    /// <summary>
+    /// Belirtilen plaka icin giris anindaki gorsel yolunu dondurur.
+    /// Once _allVehicles'tan, bulamazsa ImageCache klasorundan arar.
+    /// </summary>
+    public string GetEntryImageForPlate(string plate)
+    {
+        if (string.IsNullOrWhiteSpace(plate)) return "";
+
+        var row = _allVehicles.FirstOrDefault(v =>
+            string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(v.EntryPlateImagePath));
+
+        if (row != null && System.IO.File.Exists(row.EntryPlateImagePath))
+            return row.EntryPlateImagePath;
+
+        var cacheDir = @"C:\Otopark\ImageCache\";
+        if (!System.IO.Directory.Exists(cacheDir)) return "";
+
+        var safePlate = string.Concat(plate.Split(System.IO.Path.GetInvalidFileNameChars()));
+        var files = System.IO.Directory.GetFiles(cacheDir, $"{safePlate}_*.jpg")
+            .OrderBy(f => f)
+            .ToArray();
+
+        return files.Length > 0 ? files[0] : "";
     }
 
     // ===== YARDIMCI =====

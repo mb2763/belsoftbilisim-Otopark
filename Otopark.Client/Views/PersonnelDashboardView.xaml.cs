@@ -34,16 +34,13 @@ namespace Otopark.Client.Views
         private const string EntryShotsFolder = @"D:\GESI\OTOPARK\EntryShots\";
         private const string ExitShotsFolder = @"D:\GESI\OTOPARK\ExitShots\";
 
-        private const string PlateRecognizerToken = "2059e14b4a694207a913240af6da257abd38092e";
+        // Lokal plaka tanima - internet/API yok, kota yok
+        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.30, windowSeconds: 4.0, neededHits: 1);
+        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.30, windowSeconds: 4.0, neededHits: 1);
+        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 5.0);
+        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 5.0);
 
-        // Daha dusuk minScore + gevsek stabilizer: hareket halindeki aracin bulanik
-        // frame'lerini de yakala, yuksek skorlu (>=0.85) frame varsa tek hit'de kabul et.
-        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
-        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
-        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 8.0);
-        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 8.0);
-
-        private readonly PlateRecognizerClient _client = new(PlateRecognizerToken);
+        private readonly LocalPlateRecognizer _recognizer = new();
 
         public PersonnelDashboardView()
         {
@@ -175,7 +172,7 @@ namespace Otopark.Client.Views
 
         private void StartUiTimer()
         {
-            _uiTimer.Interval = TimeSpan.FromMilliseconds(1000);
+            _uiTimer.Interval = TimeSpan.FromMilliseconds(1500);
             _uiTimer.Tick += async (_, __) =>
             {
                 if (_tickBusy) return;
@@ -273,21 +270,20 @@ namespace Otopark.Client.Views
             string side = isEntry ? "giris" : "cikis";
             try
             {
-                // 1) Once tum goruntuyle dene
+                // 1) Tam goruntu - TR bolge ipucu ile (Turk plakalarinda %90+ dogruluk)
                 var best = await RecognizeWithScoreAsync(imagePath, ct);
 
-                // 2) ROI zoom etkinse ve ilk deneme zayifsa, kirpilmis goruntuyle de dene; en iyi secilir
-                var roiEnabled = bool.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:Enabled"], out var re) && re;
-                if (roiEnabled && (best == null || best.Value.Score < 0.90))
+                // 2) ROI kirpma: skor < 0.80 veya sonuc yoksa her zaman dene
+                if (best == null || best.Value.Score < 0.80)
                 {
                     double xp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:XPercent"],
-                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) ? x : 0.15;
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) ? x : 0.10;
                     double yp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:YPercent"],
-                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) ? y : 0.30;
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) ? y : 0.25;
                     double wp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:WidthPercent"],
-                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var w) ? w : 0.70;
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var w) ? w : 0.80;
                     double hp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:HeightPercent"],
-                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var h) ? h : 0.65;
+                        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var h) ? h : 0.75;
 
                     var cropped = ImageCropHelper.CropToRoi(imagePath, xp, yp, wp, hp);
                     if (!string.Equals(cropped, imagePath, StringComparison.OrdinalIgnoreCase))
@@ -310,20 +306,19 @@ namespace Otopark.Client.Views
                 string plate = best.Value.Plate;
                 double score = best.Value.Score;
 
-                // Genel plaka formati (Turk + yabanci, tabela kelimeleri haric)
                 if (!PlateRules.IsLikelyPlate(plate))
                 {
                     Log($"[{side}] Red (format/kelime): '{plate}' skor={score:F2}");
                     return;
                 }
 
-                if (score < 0.55)
+                // Dusurulmus esik: 0.45 (onceden 0.55)
+                if (score < 0.45)
                 {
                     Log($"[{side}] Red (skor dusuk): '{plate}' skor={score:F2}");
                     return;
                 }
 
-                // Stabilizer: yuksek skorlu ilk hit direkt gecer
                 var stabilizer = isEntry ? _entryStabilizer : _exitStabilizer;
                 var stable = stabilizer.Push(plate, score, DateTime.UtcNow);
                 if (stable == null)
@@ -335,11 +330,10 @@ namespace Otopark.Client.Views
                 var suppressor = isEntry ? _entrySuppressor : _exitSuppressor;
                 if (suppressor.ShouldSuppress(stable.Plate, DateTime.UtcNow))
                 {
-                    Log($"[{side}] Suppress (8sn): '{stable.Plate}'");
+                    Log($"[{side}] Suppress (5sn): '{stable.Plate}'");
                     return;
                 }
 
-                // Plaka okundugu anda snapshot'lari kaydet
                 var captureFolder = isEntry ? EntryCaptureFolder : ExitCaptureFolder;
                 var savedSnapshots = SavePlateSnapshots(stable.Plate, captureFolder, imagePath);
 
@@ -365,6 +359,8 @@ namespace Otopark.Client.Views
                     {
                         vm.ExitDetectedPlate = stable.Plate;
                         vm.ExitPlateSnapshotPaths = savedSnapshots;
+                        // Giris anindaki gorseli bul ve cikis panelinde goster
+                        vm.ExitEntryImagePath = vm.GetEntryImageForPlate(stable.Plate);
 
                         if (autoApprove && vm.ApproveExitCommand.CanExecute(null))
                             await vm.ApproveExitCommand.ExecuteAsync(null);
@@ -373,21 +369,16 @@ namespace Otopark.Client.Views
 
                 Log($"[{side}] KABUL{(autoApprove ? " + OTO-ONAY" : "")}: '{stable.Plate}' skor={stable.Score:F2}");
 
-                // Temp ROI dosyalarini ara sira temizle
                 ImageCropHelper.CleanupTempRoi();
             }
             catch (Exception ex) { Log($"[{side}] Detect hata: {ex.Message}"); }
         }
 
-        /// <summary>
-        /// Bir goruntuden plaka okur. Format gecen en yuksek skorlu adayi dondurur.
-        /// </summary>
         private async Task<(string Plate, double Score)?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
-            var r = await _client.RecognizeAsync(imagePath, null, ct);
+            var r = await _recognizer.RecognizeAsync(imagePath, ct);
             if (r == null || string.IsNullOrWhiteSpace(r.Plate)) return null;
-            var plate = PlateRules.Normalize(r.Plate);
-            return (plate, r.Score);
+            return (r.Plate, r.Score);
         }
 
         // ===== BARIYER =====
@@ -474,13 +465,12 @@ namespace Otopark.Client.Views
             (string Plate, double Score, string UsedImagePath)? best = null;
             foreach (var img in images)
             {
-                var r = await _client.RecognizeAsync(img, null, ct);
+                var r = await _recognizer.RecognizeAsync(img, ct);
                 if (r == null) continue;
-                var plate = PlateRules.Normalize(r.Plate);
-                if (!PlateRules.IsLikelyPlate(plate)) continue;
-                if (r.Score < 0.55) continue;
+                if (!PlateRules.IsLikelyPlate(r.Plate)) continue;
+                if (r.Score < 0.30) continue;
                 if (best == null || r.Score > best.Value.Score)
-                    best = (plate, r.Score, img);
+                    best = (r.Plate, r.Score, img);
             }
             return best;
         }
