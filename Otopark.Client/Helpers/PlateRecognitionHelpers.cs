@@ -1,6 +1,12 @@
+using Newtonsoft.Json;
 using System;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Otopark.Client.Helpers
 {
@@ -128,4 +134,94 @@ namespace Otopark.Client.Helpers
         }
     }
 
+    /// <summary>
+    /// PlateRecognizer Cloud API istemcisi - calisan eski versiyon.
+    /// regions=null: tum bolgeler (Turk + yabanci) icin calisir.
+    /// </summary>
+    internal sealed class PlateRecognizerClient
+    {
+        private static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+        // Cok kisa araliklarla cagri yapilmasin: kota tasmasin
+        private static readonly SemaphoreSlim _rateLimiter = new(1, 1);
+        private static DateTime _lastCallUtc = DateTime.MinValue;
+        private const int MinIntervalMs = 800;
+
+        private readonly string _token;
+        public PlateRecognizerClient(string token) { _token = token; }
+
+        public async Task<PlateRecognitionResult?> RecognizeAsync(string imagePath, string? regions, CancellationToken ct)
+        {
+            if (!File.Exists(imagePath)) return null;
+
+            // Rate limit: max ~1 cagri / 0.8sn
+            await _rateLimiter.WaitAsync(ct);
+            try
+            {
+                var elapsed = (DateTime.UtcNow - _lastCallUtc).TotalMilliseconds;
+                if (elapsed < MinIntervalMs)
+                    await Task.Delay((int)(MinIntervalMs - elapsed), ct);
+                _lastCallUtc = DateTime.UtcNow;
+            }
+            finally { _rateLimiter.Release(); }
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.platerecognizer.com/v1/plate-reader/");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Token", _token);
+
+            using var form = new MultipartFormDataContent();
+            if (!string.IsNullOrWhiteSpace(regions))
+                form.Add(new StringContent(regions), "regions");
+
+            var bytes = await File.ReadAllBytesAsync(imagePath, ct);
+            form.Add(new ByteArrayContent(bytes), "upload", Path.GetFileName(imagePath));
+            req.Content = form;
+
+            using var resp = await Http.SendAsync(req, ct);
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
+                    resp.StatusCode == System.Net.HttpStatusCode.PaymentRequired)
+                {
+                    throw new InvalidOperationException(
+                        $"PlateRecognizer kota/limit asimi: HTTP {(int)resp.StatusCode}");
+                }
+                return null;
+            }
+
+            var parsed = JsonConvert.DeserializeObject<PlateRecognizerResponse>(json);
+            if (parsed?.results == null || parsed.results.Length == 0) return null;
+
+            (string plate, double score)? best = null;
+            foreach (var r in parsed.results)
+            {
+                if (r.candidates == null) continue;
+                foreach (var c in r.candidates)
+                {
+                    if (string.IsNullOrWhiteSpace(c.plate)) continue;
+                    var normalized = PlateRules.Normalize(c.plate);
+                    if (!PlateRules.IsLikelyPlate(normalized)) continue;
+                    if (best == null || c.score > best.Value.score)
+                        best = (normalized, c.score);
+                }
+            }
+
+            if (best == null)
+            {
+                var topR = parsed.results[0];
+                if (topR.candidates != null && topR.candidates.Length > 0)
+                {
+                    var topC = topR.candidates.OrderByDescending(c => c.score).First();
+                    return new PlateRecognitionResult(topC.plate ?? "", topC.score);
+                }
+                return null;
+            }
+
+            return new PlateRecognitionResult(best.Value.plate, best.Value.score);
+        }
+
+        private sealed class PlateRecognizerResponse { public PlateRecognizerResult[]? results { get; set; } }
+        private sealed class PlateRecognizerResult { public PlateCandidate[]? candidates { get; set; } }
+        private sealed class PlateCandidate { public string? plate { get; set; } public double score { get; set; } }
+    }
 }

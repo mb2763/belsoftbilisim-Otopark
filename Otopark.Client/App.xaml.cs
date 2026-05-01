@@ -4,7 +4,10 @@ using Otopark.Api;
 using Otopark.Api.Services;
 using Otopark.Client.Views;
 using Otopark.Core;
+using System;
+using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace Otopark.Client;
 
@@ -14,6 +17,20 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Yakalanamamis exception'lari logla (uygulama crash olmasin, log dosyasina yazsin)
+        AppDomain.CurrentDomain.UnhandledException += (s, ex) =>
+            LogCrash("AppDomain", ex.ExceptionObject as Exception);
+        DispatcherUnhandledException += (s, ex) =>
+        {
+            LogCrash("Dispatcher", ex.Exception);
+            ex.Handled = true; // crash etme
+        };
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, ex) =>
+        {
+            LogCrash("Task", ex.Exception);
+            ex.SetObserved();
+        };
+
         _host = Host.CreateDefaultBuilder()
             .ConfigureServices(services =>
             {
@@ -59,5 +76,18 @@ public partial class App : Application
         mainWindow.Show();
 
         base.OnStartup(e);
+    }
+
+    private static void LogCrash(string source, Exception? ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(@"C:\Otopark");
+            var msg = ex == null
+                ? $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | CRASH [{source}]: (null exception){Environment.NewLine}"
+                : $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | CRASH [{source}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}{ex.StackTrace}{Environment.NewLine}";
+            File.AppendAllText(@"C:\Otopark\log.txt", msg);
+        }
+        catch { }
     }
 }

@@ -227,14 +227,21 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     EntryDateTime = d.EntryTimestamp,
                     ExitDateTime = d.ExitTimestamp,
                     EntryPlateImagePath = "",
+                    ExitPlateImagePath = "",
                     OldDebt = (decimal)d.Balance,
                     CurrentDebt = (decimal)(d.CalculatedFee ?? 0),
                     TotalDebt = (decimal)(d.CurrentDebitAmount ?? 0),
                 };
+
+                // Lokal cache'te plaka+timestamp ile esles
+                row.EntryPlateImagePath = FindLocalImageForRow(row.Plate, d.EntryTimestamp, isEntry: true);
+                if (d.ExitTimestamp.HasValue)
+                    row.ExitPlateImagePath = FindLocalImageForRow(row.Plate, d.ExitTimestamp.Value, isEntry: false);
+
                 _allVehicles.Add(row);
 
-                // Resmi API'den cek (arka planda)
-                if (d.EntryId > 0)
+                // Lokal cache'te yoksa API'den cek (arka planda, sadece giris icin)
+                if (string.IsNullOrEmpty(row.EntryPlateImagePath) && d.EntryId > 0)
                     _ = LoadEntryImageAsync(row, d.EntryId);
             }
 
@@ -728,7 +735,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     /// <summary>
     /// Belirtilen plaka icin giris anindaki gorsel yolunu dondurur.
-    /// Once _allVehicles'tan, bulamazsa ImageCache klasorundan arar.
+    /// Once _allVehicles'tan, bulamazsa ImageCache klasorunden _E_ desenli en son dosyayi alir.
     /// </summary>
     public string GetEntryImageForPlate(string plate)
     {
@@ -745,11 +752,55 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         if (!System.IO.Directory.Exists(cacheDir)) return "";
 
         var safePlate = string.Concat(plate.Split(System.IO.Path.GetInvalidFileNameChars()));
-        var files = System.IO.Directory.GetFiles(cacheDir, $"{safePlate}_*.jpg")
-            .OrderBy(f => f)
+        // Yeni naming: PLAKA_E_yyyyMMddHHmmss.jpg
+        var files = System.IO.Directory.GetFiles(cacheDir, $"{safePlate}_E_*.jpg")
+            .OrderByDescending(f => f)
             .ToArray();
 
         return files.Length > 0 ? files[0] : "";
+    }
+
+    /// <summary>
+    /// Plaka + timestamp eslesmesiyle lokal cache'ten resim yolu bulur.
+    /// Format: PLAKA_E_yyyyMMddHHmmss.jpg (giris) / PLAKA_X_yyyyMMddHHmmss.jpg (cikis)
+    /// ±10 saniye tolerans icinde en yakin dosyayi dondurur.
+    /// </summary>
+    public static string FindLocalImageForRow(string plate, DateTime timestamp, bool isEntry)
+    {
+        if (string.IsNullOrWhiteSpace(plate)) return "";
+
+        var cacheDir = @"C:\Otopark\ImageCache\";
+        if (!System.IO.Directory.Exists(cacheDir)) return "";
+
+        var safePlate = string.Concat(plate.Split(System.IO.Path.GetInvalidFileNameChars()));
+        var prefix = isEntry ? "E" : "X";
+        var pattern = $"{safePlate}_{prefix}_*.jpg";
+
+        var candidates = System.IO.Directory.GetFiles(cacheDir, pattern);
+        if (candidates.Length == 0) return "";
+
+        string bestPath = "";
+        double bestDelta = double.MaxValue;
+
+        foreach (var f in candidates)
+        {
+            var name = System.IO.Path.GetFileNameWithoutExtension(f);
+            var underIdx = name.LastIndexOf('_');
+            if (underIdx < 0) continue;
+            var tsStr = name.Substring(underIdx + 1);
+            if (!DateTime.TryParseExact(tsStr, "yyyyMMddHHmmss", null,
+                System.Globalization.DateTimeStyles.None, out var fileTs))
+                continue;
+
+            var delta = Math.Abs((fileTs - timestamp).TotalSeconds);
+            if (delta <= 10 && delta < bestDelta)
+            {
+                bestDelta = delta;
+                bestPath = f;
+            }
+        }
+
+        return bestPath;
     }
 
     // ===== YARDIMCI =====

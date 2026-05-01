@@ -12,7 +12,8 @@ namespace Otopark.Client.Views
 {
     public partial class PersonnelDashboardView : System.Windows.Controls.UserControl
     {
-        private readonly DispatcherTimer _uiTimer = new();
+        private readonly DispatcherTimer _uiTimer = new();          // Canli kamera goruntulerini guncelle (hizli)
+        private readonly DispatcherTimer _detectTimer = new();      // OCR icin (yavas, kota tasarrufu)
         private FileSystemWatcher? _entryWatcher;
         private FileSystemWatcher? _exitWatcher;
 
@@ -34,17 +35,34 @@ namespace Otopark.Client.Views
         private const string EntryShotsFolder = @"D:\GESI\OTOPARK\EntryShots\";
         private const string ExitShotsFolder = @"D:\GESI\OTOPARK\ExitShots\";
 
-        // Lokal plaka tanima - internet/API yok, kota yok
-        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.30, windowSeconds: 4.0, neededHits: 1);
-        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.30, windowSeconds: 4.0, neededHits: 1);
-        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 5.0);
-        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 5.0);
+        // PlateRecognizer Cloud API token - calisan eski versiyondaki ayni
+        private const string PlateRecognizerToken = "2059e14b4a694207a913240af6da257abd38092e";
 
-        private readonly LocalPlateRecognizer _recognizer = new();
+        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
+        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
+        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 8.0);
+        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 8.0);
+
+        // Birincil: PlateRecognizer Cloud API (calisan eski versiyon)
+        private readonly PlateRecognizerClient _client = new(PlateRecognizerToken);
+        // Yedek: lokal OCR (API kota/network sorunu olursa devreye girer)
+        private LocalPlateRecognizer? _recognizer;
 
         public PersonnelDashboardView()
         {
             InitializeComponent();
+
+            // OCR motorunu defensif baslat - native DLL/tessdata sorununda app crash olmasin
+            try
+            {
+                _recognizer = new LocalPlateRecognizer();
+            }
+            catch (Exception ex)
+            {
+                Log($"OCR motor baslatilamadi: {ex.Message}");
+                _recognizer = null;
+            }
+
             Start();
             Loaded += (_, __) => Start();
             Unloaded += (_, __) => Stop();
@@ -161,6 +179,7 @@ namespace Otopark.Client.Views
             try
             {
                 _uiTimer.Stop();
+                _detectTimer.Stop();
                 _entryWatcher?.Dispose();
                 _exitWatcher?.Dispose();
                 _cts.Cancel();
@@ -172,20 +191,28 @@ namespace Otopark.Client.Views
 
         private void StartUiTimer()
         {
-            _uiTimer.Interval = TimeSpan.FromMilliseconds(1500);
-            _uiTimer.Tick += async (_, __) =>
+            // Canli kamera UI timer: 400ms - akici goruntu
+            _uiTimer.Interval = TimeSpan.FromMilliseconds(400);
+            _uiTimer.Tick += (_, __) =>
+            {
+                try { LoadLatestImages(); } catch { }
+            };
+            _uiTimer.Start();
+
+            // OCR detect timer: 1500ms - kota tasarrufu
+            _detectTimer.Interval = TimeSpan.FromMilliseconds(1500);
+            _detectTimer.Tick += async (_, __) =>
             {
                 if (_tickBusy) return;
                 _tickBusy = true;
                 try
                 {
-                    LoadLatestImages();
                     await DetectFromFolderAsync(EntryCaptureFolder, isEntry: true, _cts.Token);
                     await DetectFromFolderAsync(ExitCaptureFolder, isEntry: false, _cts.Token);
                 }
                 finally { _tickBusy = false; }
             };
-            _uiTimer.Start();
+            _detectTimer.Start();
         }
 
         // ===== WATCHER =====
@@ -312,8 +339,7 @@ namespace Otopark.Client.Views
                     return;
                 }
 
-                // Dusurulmus esik: 0.45 (onceden 0.55)
-                if (score < 0.45)
+                if (score < 0.55)
                 {
                     Log($"[{side}] Red (skor dusuk): '{plate}' skor={score:F2}");
                     return;
@@ -330,20 +356,25 @@ namespace Otopark.Client.Views
                 var suppressor = isEntry ? _entrySuppressor : _exitSuppressor;
                 if (suppressor.ShouldSuppress(stable.Plate, DateTime.UtcNow))
                 {
-                    Log($"[{side}] Suppress (5sn): '{stable.Plate}'");
+                    Log($"[{side}] Suppress (8sn): '{stable.Plate}'");
                     return;
                 }
 
                 var captureFolder = isEntry ? EntryCaptureFolder : ExitCaptureFolder;
-                var savedSnapshots = SavePlateSnapshots(stable.Plate, captureFolder, imagePath);
+                var savedSnapshots = SavePlateSnapshots(stable.Plate, captureFolder, imagePath, isEntry);
 
+                // Default: AUTO-APPROVE her zaman acik. Sadece "false" yazilirsa kapanir.
                 bool autoApprove = isEntry
-                    ? (bool.TryParse(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Entry"], out var ae) && ae)
-                    : (bool.TryParse(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Exit"], out var ax) && ax);
+                    ? !string.Equals(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Entry"], "false", StringComparison.OrdinalIgnoreCase)
+                    : !string.Equals(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Exit"], "false", StringComparison.OrdinalIgnoreCase);
 
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    if (DataContext is not PersonnelDashboardViewModel vm) return;
+                    if (DataContext is not PersonnelDashboardViewModel vm)
+                    {
+                        Log($"[{side}] OTO-ONAY iptal: DataContext bos");
+                        return;
+                    }
 
                     if (isEntry)
                     {
@@ -352,18 +383,37 @@ namespace Otopark.Client.Views
                         var base64 = Convert.ToBase64String(File.ReadAllBytes(imagePath));
                         vm.SetPendingEntry(stable.Plate, base64);
 
-                        if (autoApprove && vm.ApproveEntryCommand.CanExecute(null))
-                            await vm.ApproveEntryCommand.ExecuteAsync(null);
+                        if (autoApprove)
+                        {
+                            if (vm.ApproveEntryCommand.CanExecute(null))
+                            {
+                                Log($"[{side}] OTO-ONAY tetikleniyor: '{stable.Plate}'");
+                                await vm.ApproveEntryCommand.ExecuteAsync(null);
+                            }
+                            else
+                            {
+                                Log($"[{side}] OTO-ONAY iptal: ApproveEntryCommand.CanExecute=false");
+                            }
+                        }
                     }
                     else
                     {
                         vm.ExitDetectedPlate = stable.Plate;
                         vm.ExitPlateSnapshotPaths = savedSnapshots;
-                        // Giris anindaki gorseli bul ve cikis panelinde goster
                         vm.ExitEntryImagePath = vm.GetEntryImageForPlate(stable.Plate);
 
-                        if (autoApprove && vm.ApproveExitCommand.CanExecute(null))
-                            await vm.ApproveExitCommand.ExecuteAsync(null);
+                        if (autoApprove)
+                        {
+                            if (vm.ApproveExitCommand.CanExecute(null))
+                            {
+                                Log($"[{side}] OTO-ONAY tetikleniyor: '{stable.Plate}'");
+                                await vm.ApproveExitCommand.ExecuteAsync(null);
+                            }
+                            else
+                            {
+                                Log($"[{side}] OTO-ONAY iptal: ApproveExitCommand.CanExecute=false");
+                            }
+                        }
                     }
                 });
 
@@ -374,11 +424,59 @@ namespace Otopark.Client.Views
             catch (Exception ex) { Log($"[{side}] Detect hata: {ex.Message}"); }
         }
 
+        // Once API'yi dene; basarisizsa (timeout/kota/network) yedek olarak lokal OCR
         private async Task<(string Plate, double Score)?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
-            var r = await _recognizer.RecognizeAsync(imagePath, ct);
-            if (r == null || string.IsNullOrWhiteSpace(r.Plate)) return null;
-            return (r.Plate, r.Score);
+            try
+            {
+                var r = await _client.RecognizeAsync(imagePath, null, ct);
+                if (r != null && !string.IsNullOrWhiteSpace(r.Plate))
+                {
+                    var plate = PlateRules.Normalize(r.Plate);
+                    return (plate, r.Score);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"API hata, lokal yedege geciliyor: {ex.Message}");
+            }
+
+            // Yedek: lokal OCR
+            if (_recognizer != null)
+            {
+                var local = await _recognizer.RecognizeAsync(imagePath, ct);
+                if (local != null && !string.IsNullOrWhiteSpace(local.Plate))
+                    return (local.Plate, local.Score);
+            }
+
+            return null;
+        }
+
+        // ===== TABLO RESIM CIFT TIKLAMA =====
+
+        private void PlateImage_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ClickCount != 2) return; // sadece cift tiklama
+            if (sender is not System.Windows.Controls.Border border) return;
+            if (border.DataContext is not Otopark.Core.PersonnelDashboardViewModel.VehicleRow row) return;
+
+            string side = (border.Tag as string) ?? "entry";
+            bool isEntry = side == "entry";
+            string imgPath = isEntry ? row.EntryPlateImagePath : row.ExitPlateImagePath;
+            string title = isEntry ? "Giris Plaka Goruntusu" : "Cikis Plaka Goruntusu";
+
+            if (string.IsNullOrWhiteSpace(imgPath) || !File.Exists(imgPath))
+            {
+                if (DataContext is PersonnelDashboardViewModel vm)
+                    vm.ShowBarrierToast(false, "Bu kayit icin gorsel yok.");
+                return;
+            }
+
+            var popup = new PlateImagePopup(row.Plate, imgPath, title)
+            {
+                Owner = Window.GetWindow(this)
+            };
+            popup.ShowDialog();
         }
 
         // ===== BARIYER =====
@@ -465,17 +563,19 @@ namespace Otopark.Client.Views
             (string Plate, double Score, string UsedImagePath)? best = null;
             foreach (var img in images)
             {
-                var r = await _recognizer.RecognizeAsync(img, ct);
+                var r = await RecognizeWithScoreAsync(img, ct);
                 if (r == null) continue;
-                if (!PlateRules.IsLikelyPlate(r.Plate)) continue;
-                if (r.Score < 0.30) continue;
-                if (best == null || r.Score > best.Value.Score)
-                    best = (r.Plate, r.Score, img);
+                if (!PlateRules.IsLikelyPlate(r.Value.Plate)) continue;
+                if (r.Value.Score < 0.55) continue;
+                if (best == null || r.Value.Score > best.Value.Score)
+                    best = (r.Value.Plate, r.Value.Score, img);
             }
             return best;
         }
 
         // ===== GORSEL YUKLEME =====
+
+        private DateTime _lastFolderLog = DateTime.MinValue;
 
         private void LoadLatestImages()
         {
@@ -490,22 +590,24 @@ namespace Otopark.Client.Views
             if (entryFiles.Length > 0) vm.EntryPhoto1 = entryFiles[0];
             if (entryFiles.Length > 1) vm.EntryPhoto2 = entryFiles[1];
 
-            // Cikis buyuk gorsel (ExitCaptures yoksa EntryCaptures'tan al)
+            // Cikis buyuk gorsel
             var exitImg = GetLatestImageFile(ExitCaptureFolder);
-            if (exitImg == null || exitImg.LastWriteTimeUtc < DateTime.UtcNow.AddMinutes(-5))
-            {
-                var fallback = GetLatestImageFile(EntryCaptureFolder);
-                if (fallback != null && (exitImg == null || fallback.LastWriteTimeUtc > exitImg.LastWriteTimeUtc))
-                    exitImg = fallback;
-            }
             if (exitImg != null) vm.ExitCameraImagePath = exitImg.FullName;
 
             // Cikis son 2 kucuk gorsel
             var exitFiles = GetLatestImageFiles(ExitCaptureFolder, 2);
-            if (exitFiles.Length < 2)
-                exitFiles = GetLatestImageFiles(EntryCaptureFolder, 2);
             if (exitFiles.Length > 0) vm.ExitPhoto1 = exitFiles[0];
             if (exitFiles.Length > 1) vm.ExitPhoto2 = exitFiles[1];
+
+            // Tani log: 30 saniyede bir, klasor durumunu logla
+            if ((DateTime.Now - _lastFolderLog).TotalSeconds >= 30)
+            {
+                _lastFolderLog = DateTime.Now;
+                int eCount = Directory.Exists(EntryCaptureFolder) ? Directory.GetFiles(EntryCaptureFolder, "*.jpg").Length : -1;
+                int xCount = Directory.Exists(ExitCaptureFolder) ? Directory.GetFiles(ExitCaptureFolder, "*.jpg").Length : -1;
+                Log($"UI: Entry={EntryCaptureFolder} ({eCount} dosya) | Exit={ExitCaptureFolder} ({xCount} dosya)");
+                Log($"UI: EntryCam='{vm.EntryCameraImagePath}' | ExitCam='{vm.ExitCameraImagePath}'");
+            }
         }
 
         // ===== YARDIMCI =====
@@ -539,44 +641,36 @@ namespace Otopark.Client.Views
         }
 
         /// <summary>
-        /// Plaka okundugu anda snapshot'lari kaydeder.
-        /// 1. resim: plakanin tam taninan dosyasi (recognizedImagePath)
-        /// 2-3. resim: klasordeki son snapshot'lar (ayni dosya hariç)
-        /// Dosya adi: C:\Otopark\ImageCache\PLAKA_yyyyMMdd_HHmmss_1.jpg
+        /// Plaka okundugu anda resmi kaydeder.
+        /// Dosya adi: C:\Otopark\ImageCache\{PLAKA}_E_{yyyyMMddHHmmss}.jpg (giris)
+        ///        veya C:\Otopark\ImageCache\{PLAKA}_X_{yyyyMMddHHmmss}.jpg (cikis)
+        /// Sunucudan veri cekildiginde plaka + timestamp eslesmesiyle bulunabilir.
         /// </summary>
-        private static string[] SavePlateSnapshots(string plate, string captureFolder, string recognizedImagePath)
+        private static string[] SavePlateSnapshots(string plate, string captureFolder, string recognizedImagePath, bool isEntry)
         {
             try
             {
                 var safePlate = string.Concat(plate.Split(Path.GetInvalidFileNameChars()));
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                var timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+                var prefix = isEntry ? "E" : "X";
                 var cacheDir = @"C:\Otopark\ImageCache\";
                 Directory.CreateDirectory(cacheDir);
 
-                var sources = new System.Collections.Generic.List<string>();
-
-                // 1. Taninan resim her zaman ilk sirada
+                // Kaynak resmi sec: oncelik recognizedImagePath, yoksa klasordeki son resim
+                string? source = null;
                 if (!string.IsNullOrEmpty(recognizedImagePath) && File.Exists(recognizedImagePath))
-                    sources.Add(recognizedImagePath);
-
-                // 2-3. Klasordeki son snapshot'lardan taninan disindakileri ekle
-                foreach (var f in GetLatestImageFiles(captureFolder, 4))
+                    source = recognizedImagePath;
+                else
                 {
-                    if (sources.Count >= 3) break;
-                    if (!string.Equals(f, recognizedImagePath, StringComparison.OrdinalIgnoreCase))
-                        sources.Add(f);
+                    var latest = GetLatestImageFiles(captureFolder, 1);
+                    if (latest.Length > 0) source = latest[0];
                 }
 
-                if (sources.Count == 0) return Array.Empty<string>();
+                if (source == null) return Array.Empty<string>();
 
-                var saved = new System.Collections.Generic.List<string>();
-                for (int i = 0; i < sources.Count; i++)
-                {
-                    var dest = Path.Combine(cacheDir, $"{safePlate}_{timestamp}_{i + 1}.jpg");
-                    File.Copy(sources[i], dest, true);
-                    saved.Add(dest);
-                }
-                return saved.ToArray();
+                var dest = Path.Combine(cacheDir, $"{safePlate}_{prefix}_{timestamp}.jpg");
+                File.Copy(source, dest, true);
+                return new[] { dest };
             }
             catch { return Array.Empty<string>(); }
         }

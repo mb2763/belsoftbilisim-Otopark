@@ -236,10 +236,13 @@
                                         <DataTemplate>
                                             <Border Width="110" Height="45"
                                                     Background="#EEE" CornerRadius="6"
-                                                    BorderBrush="#DDD" BorderThickness="1">
+                                                    BorderBrush="#DDD" BorderThickness="1"
+                                                    Cursor="Hand" Tag="entry"
+                                                    MouseLeftButtonDown="PlateImage_MouseDown">
                                                 <Image Source="{Binding EntryPlateImagePath, Converter={StaticResource PathToImage}}"
                                                        Stretch="Uniform"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       IsHitTestVisible="False"/>
                                             </Border>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
@@ -252,10 +255,13 @@
                                         <DataTemplate>
                                             <Border Width="110" Height="45"
                                                     Background="#EEE" CornerRadius="6"
-                                                    BorderBrush="#DDD" BorderThickness="1">
+                                                    BorderBrush="#DDD" BorderThickness="1"
+                                                    Cursor="Hand" Tag="exit"
+                                                    MouseLeftButtonDown="PlateImage_MouseDown">
                                                 <Image Source="{Binding ExitPlateImagePath, Converter={StaticResource PathToImage}}"
                                                        Stretch="Uniform"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       IsHitTestVisible="False"/>
                                             </Border>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
@@ -421,17 +427,17 @@
 
                                 <Border Background="#F0F3F9" CornerRadius="10"
                                         MinHeight="140" MaxHeight="220">
-                                    <Image Source="{Binding EntryCameraImagePath}" Stretch="Uniform"/>
+                                    <Image Source="{Binding EntryCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=800}" Stretch="Uniform"/>
                                 </Border>
 
                                 <WrapPanel HorizontalAlignment="Center" Margin="0,6,0,0">
                                     <Border Width="90" Height="55" Background="#EEE" Margin="3"
                                             CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
-                                        <Image Source="{Binding EntryPhoto1}" Stretch="UniformToFill"/>
+                                        <Image Source="{Binding EntryPhoto1, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                     <Border Width="90" Height="55" Background="#EEE" Margin="3"
                                             CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
-                                        <Image Source="{Binding EntryPhoto2}" Stretch="UniformToFill"/>
+                                        <Image Source="{Binding EntryPhoto2, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                 </WrapPanel>
                             </StackPanel>
@@ -464,7 +470,7 @@
                                 <!-- Cikis kamerasi (anlik goruntu) -->
                                 <Border Background="#FDF0F0" CornerRadius="10"
                                         MinHeight="120" MaxHeight="180">
-                                    <Image Source="{Binding ExitCameraImagePath}" Stretch="Uniform"/>
+                                    <Image Source="{Binding ExitCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=800}" Stretch="Uniform"/>
                                 </Border>
 
                                 <!-- Giris ani gorseli -->
@@ -488,11 +494,11 @@
                                 <WrapPanel HorizontalAlignment="Center" Margin="0,6,0,0">
                                     <Border Width="90" Height="55" Background="#EEE" Margin="3"
                                             CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
-                                        <Image Source="{Binding ExitPhoto1}" Stretch="UniformToFill"/>
+                                        <Image Source="{Binding ExitPhoto1, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                     <Border Width="90" Height="55" Background="#EEE" Margin="3"
                                             CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
-                                        <Image Source="{Binding ExitPhoto2}" Stretch="UniformToFill"/>
+                                        <Image Source="{Binding ExitPhoto2, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                 </WrapPanel>
                             </StackPanel>
