@@ -1,6 +1,8 @@
+using Microsoft.Extensions.Configuration;
 using Otopark.Client.Helpers;
 using Otopark.Core;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -35,18 +37,37 @@ namespace Otopark.Client.Views
         private const string EntryShotsFolder = @"D:\GESI\OTOPARK\EntryShots\";
         private const string ExitShotsFolder = @"D:\GESI\OTOPARK\ExitShots\";
 
-        // PlateRecognizer Cloud API token - calisan eski versiyondaki ayni
-        private const string PlateRecognizerToken = "2059e14b4a694207a913240af6da257abd38092e";
+        // PlateRecognizer Cloud API tokenleri - appsettings.json'dan alinir, coklu destek
+        private static readonly string[] DefaultTokens = new[]
+        {
+            "2059e14b4a694207a913240af6da257abd38092e",
+        };
 
         private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
         private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
         private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 8.0);
         private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 8.0);
 
-        // Birincil: PlateRecognizer Cloud API (calisan eski versiyon)
-        private readonly PlateRecognizerClient _client = new(PlateRecognizerToken);
+        // Birincil: PlateRecognizer Cloud API (coklu token rotasyonu)
+        private readonly PlateRecognizerClient _client = new(LoadTokensFromConfig());
         // Yedek: lokal OCR (API kota/network sorunu olursa devreye girer)
         private LocalPlateRecognizer? _recognizer;
+
+        private static IEnumerable<string> LoadTokensFromConfig()
+        {
+            try
+            {
+                var section = Otopark.Core.Services.AppConfig.Configuration.GetSection("PlateRecognizer:Tokens");
+                var tokens = section.GetChildren()
+                    .Select(c => c.Value)
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Cast<string>()
+                    .ToList();
+                if (tokens.Count > 0) return tokens;
+            }
+            catch { }
+            return DefaultTokens;
+        }
 
         public PersonnelDashboardView()
         {
@@ -380,7 +401,18 @@ namespace Otopark.Client.Views
                     {
                         vm.EntryDetectedPlate = stable.Plate;
                         vm.EntryPlateSnapshotPaths = savedSnapshots;
-                        var base64 = Convert.ToBase64String(File.ReadAllBytes(imagePath));
+                        // Resim arada silinmis olabilir (kamera servisi rotasyonu) - try/catch ile koru
+                        string base64 = "";
+                        try
+                        {
+                            // Once kayitli snapshot'i kullan (silinme riskine karsi), yoksa orjinali oku
+                            var srcPath = (savedSnapshots.Length > 0 && File.Exists(savedSnapshots[0]))
+                                ? savedSnapshots[0]
+                                : (File.Exists(imagePath) ? imagePath : "");
+                            if (!string.IsNullOrEmpty(srcPath))
+                                base64 = Convert.ToBase64String(File.ReadAllBytes(srcPath));
+                        }
+                        catch (Exception ex) { Log($"[{side}] Base64 okuma hatasi: {ex.Message}"); }
                         vm.SetPendingEntry(stable.Plate, base64);
 
                         if (autoApprove)
