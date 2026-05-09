@@ -31,8 +31,11 @@ namespace Otopark.Client.Helpers
         {
             if (score < _minScore) return null;
 
-            // Yuksek guvenli sonuclar tek hit'de kabul edilir (hareketli arac icin kritik)
-            if (score >= 0.85)
+            // En az 2 ardisik frame'de ayni plaka olmadan kabul edilmez.
+            // Bu, Tesseract'in tek frame'deki rastgele halusinasyonlarini engeller.
+            // Yuksek guvenli (>= 0.95) sonuclar tek hit'de kabul - PlateRecognizer Cloud API
+            // gibi guvenilir kaynaklardan gelen kesin sonuclari hareketli aracta kacirma.
+            if (score >= 0.95)
             {
                 _buffer.Clear();
                 return new StablePlate(plate, score);
@@ -42,8 +45,10 @@ namespace Otopark.Client.Helpers
             var cutoff = utcNow.AddSeconds(-_windowSeconds);
             _buffer.RemoveAll(x => x.Ts < cutoff);
 
-            if (_buffer.Count(x => x.Plate == plate && x.Score >= _minScore) < _neededHits)
-                return null;
+            // 2 ardisik frame'de ayni plaka gerekli (asgari)
+            int hits = _buffer.Count(x => x.Plate == plate && x.Score >= _minScore);
+            int required = Math.Max(2, _neededHits);
+            if (hits < required) return null;
 
             var avg = _buffer.Where(x => x.Plate == plate).Average(x => x.Score);
             _buffer.Clear();
@@ -118,6 +123,10 @@ namespace Otopark.Client.Helpers
             if (plate.Length < 5 || plate.Length > 10) return false;
             if (!plate.All(char.IsLetterOrDigit)) return false;
 
+            // TR plaka formati eslesirse direk kabul (en guclu sinyal).
+            // Bu sayede "15B1831" (06 B 1234 gibi tek harfli plakalar) reddedilmez.
+            if (TrPlate.IsMatch(plate)) return true;
+
             int letterCount = plate.Count(char.IsLetter);
             int digitCount = plate.Count(char.IsDigit);
             if (letterCount < 2 || digitCount < 2) return false;
@@ -138,10 +147,52 @@ namespace Otopark.Client.Helpers
             var letterizedLetters = new string(letterized.Where(char.IsLetter).ToArray());
             if (BlacklistWords.Contains(letterizedLetters)) return false;
 
+            // Levenshtein mesafe kontrolu (5+ karakterli sign kelimeleri icin):
+            // OCR yanilirsa "C" yerine "S", "G" yerine "C" gibi 1 harf hata yapabilir.
+            // "S1K1S" -> "SIKIS" -> CIKIS'a 1 mesafede -> reddedilir.
+            // "GBRIS" -> GIRIS'a 1 mesafede -> reddedilir.
+            if (letterizedLetters.Length >= 5)
+            {
+                foreach (var word in BlacklistWords)
+                {
+                    if (word.Length >= 5 && LevenshteinDistance(letterizedLetters, word) <= 1)
+                        return false;
+                    // Tum kelimeyle de kontrol et (rakam + harf karisik halde)
+                    if (word.Length >= 5 && LevenshteinDistance(letterized, word) <= 1)
+                        return false;
+                }
+            }
+
             // Tek karakterin tekrari (AAAAAA, 11111A gibi) - geçersiz
             if (plate.Distinct().Count() < 3) return false;
 
             return true;
+        }
+
+        /// <summary>
+        /// İki string arasindaki Levenshtein (edit) mesafesini hesaplar.
+        /// "CIKIS" - "SIKIS" -> 1 (sadece ilk harf farkli)
+        /// </summary>
+        private static int LevenshteinDistance(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
+            if (string.IsNullOrEmpty(b)) return a.Length;
+
+            int[,] d = new int[a.Length + 1, b.Length + 1];
+            for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+
+            for (int i = 1; i <= a.Length; i++)
+            {
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+                    d[i, j] = Math.Min(
+                        Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                        d[i - 1, j - 1] + cost);
+                }
+            }
+            return d[a.Length, b.Length];
         }
     }
 
@@ -288,22 +339,14 @@ namespace Otopark.Client.Helpers
                     {
                         if (string.IsNullOrWhiteSpace(c.plate)) continue;
                         var normalized = PlateRules.Normalize(c.plate);
-                        if (!PlateRules.IsLikelyPlate(normalized)) continue;
+                        // SADECE Turk plaka formatina uyan adaylari kabul et.
+                        if (!PlateRules.IsLikelyTurkishPlate(normalized)) continue;
                         if (best == null || c.score > best.Value.score)
                             best = (normalized, c.score);
                     }
                 }
 
-                if (best == null)
-                {
-                    var topR = parsed.results[0];
-                    if (topR.candidates != null && topR.candidates.Length > 0)
-                    {
-                        var topC = topR.candidates.OrderByDescending(c => c.score).First();
-                        return new PlateRecognitionResult(topC.plate ?? "", topC.score);
-                    }
-                    return null;
-                }
+                if (best == null) return null;
 
                 return new PlateRecognitionResult(best.Value.plate, best.Value.score);
             }

@@ -44,13 +44,38 @@ namespace Otopark.Client.Helpers
         };
 
         private TesseractEngine? _engine;
+        private readonly OnnxPlateDetector _onnxDetector;
+        private readonly HaarPlateDetector _haarDetector;
         private readonly object _lock = new();
         private bool _disposed;
         private bool _initError;
 
         public LocalPlateRecognizer()
         {
+            // Native DLL (OpenCvSharpExtern.dll + VC++ runtime) eksikse hicbir
+            // OpenCv tipini olusturma -> finalizer thread'de native call patlamasin.
+            if (!IsOpenCvAvailable())
+            {
+                AppLog("Lokal motor: OpenCvSharp native DLL yok, devre disi.");
+                _initError = true;
+                _onnxDetector = null!;
+                _haarDetector = null!;
+                return;
+            }
+
+            _onnxDetector = new OnnxPlateDetector();
+            _haarDetector = new HaarPlateDetector();
             InitEngine();
+        }
+
+        private static bool IsOpenCvAvailable()
+        {
+            try
+            {
+                using var m = new Mat(1, 1, MatType.CV_8UC1);
+                return !m.Empty();
+            }
+            catch { return false; }
         }
 
         private void InitEngine()
@@ -103,24 +128,37 @@ namespace Otopark.Client.Helpers
 
                 var allCandidates = new List<Candidate>();
 
-                // 1. Tum aday bolgeleri topla (tam goruntu, alt yari, otomatik tespit, beyaz bolge)
+                // 1. Tum aday bolgeleri topla
+                int regionCount = 0;
                 foreach (var region in GetCandidateRegions(src))
                 {
+                    if (regionCount++ > 8) { region.Dispose(); break; } // max 8 bolge
+
                     using (region)
                     {
-                        // 2. Her bolge icin coklu preprocessing
+                        // 2. Her bolge icin sinirli preprocessing (3 varyant)
                         foreach (var preprocessed in PreprocessVariants(region))
                         {
                             using (preprocessed)
                             {
-                                // 3. Her on-isleme icin coklu PSM modu
-                                foreach (var psm in new[] { PageSegMode.SingleLine, PageSegMode.SingleWord, PageSegMode.RawLine })
+                                // 3. PSM SingleLine + RawLine (plaka tek satir text, fazlasi yanlis pozitif)
+                                foreach (var psm in new[] { PageSegMode.SingleLine, PageSegMode.RawLine })
                                 {
                                     var c = TryOcr(preprocessed, psm);
-                                    if (c != null) allCandidates.Add(c.Value);
+                                    if (c == null) continue;
+                                    allCandidates.Add(c.Value);
+
+                                    // Her aday icin format-aware duzeltme de adaylara eklensin
+                                    var corrected = CorrectPlateFormat(c.Value.Plate);
+                                    if (corrected != c.Value.Plate && corrected.Length >= 5)
+                                        allCandidates.Add(new Candidate(corrected, c.Value.Score));
                                 }
                             }
                         }
+
+                        // Erken cikis: TR formati eslesen aday bulduysak yeter
+                        if (allCandidates.Any(x => TrPlateRx.IsMatch(x.Plate)))
+                            break;
                     }
                 }
 
@@ -135,36 +173,23 @@ namespace Otopark.Client.Helpers
                         withCorrections.Add(new Candidate(corrected, c.Score));
                 }
 
-                // 5. Aday secimi
-                // Once: Turk plaka formatina uyan, en yuksek skorlu
+                // 5. Aday secimi: SADECE Turk plaka formatina uyan adaylari kabul et.
+                //    Genel plaka kurali rastgele OCR ciktilarinda bile geçtigi icin kullanilmaz.
                 var best = withCorrections
                     .Where(c => TrPlateRx.IsMatch(c.Plate))
                     .OrderByDescending(c => c.Score)
                     .FirstOrDefault();
 
-                if (best.Plate == null)
-                {
-                    // Sonra: genel plaka kuralina uyan
-                    best = withCorrections
-                        .Where(c => PlateRules.IsLikelyPlate(c.Plate))
-                        .OrderByDescending(c => c.Score)
-                        .FirstOrDefault();
-                }
-
                 if (best.Plate == null) return null;
 
-                // 6. Format match -> skoru hatiri sayilir oranda artir (Tesseract guveni dusuk olur,
-                //    ama format eslesmesi guclu bir sinyaldir)
-                double finalScore;
-                if (TrPlateRx.IsMatch(best.Plate))
-                {
-                    // Turk plaka formati eslesti -> threshold (0.55) gecmesi icin minimum 0.75
-                    finalScore = Math.Max(0.75, Math.Min(1.0, best.Score + 0.50));
-                }
-                else
-                {
-                    finalScore = best.Score;
-                }
+                // 6. SADECE Turk plaka formati eslesirse boost ver. Aksi halde
+                //    Tesseract'in ham guveni dosun (genelde dusuk -> downstream esikten geçemez).
+                //    Bu, "PPCD45SAT" gibi rastgele OCR ciktilarinin kabulunu onler.
+                if (!TrPlateRx.IsMatch(best.Plate))
+                    return null;
+
+                // TR plaka formati eslesti -> minimum 0.85 (downstream esik 0.40, rahat geçer)
+                double finalScore = Math.Max(0.85, Math.Min(1.0, best.Score + 0.60));
 
                 return new PlateRecognitionResult(best.Plate, finalScore);
             }
@@ -181,26 +206,51 @@ namespace Otopark.Client.Helpers
 
         // ===== ADAY BOLGELER =====
 
-        private static IEnumerable<Mat> GetCandidateRegions(Mat src)
+        private IEnumerable<Mat> GetCandidateRegions(Mat src)
         {
-            // 1. Tam goruntu
-            yield return src.Clone();
-
-            // 2. Yatay dilim: alt yari, alt ucte bir, alt 2 ucte bir
-            if (src.Rows > 100)
+            // 0a. ONNX (YOLOv8) - varsa SADECE onun bolgeleri (en hassas)
+            if (_onnxDetector.IsAvailable)
             {
-                yield return new Mat(src, new OcvRect(0, src.Rows / 2, src.Cols, src.Rows / 2)).Clone();
-                yield return new Mat(src, new OcvRect(0, src.Rows * 2 / 3, src.Cols, src.Rows / 3)).Clone();
-                yield return new Mat(src, new OcvRect(0, src.Rows / 3, src.Cols, src.Rows / 3)).Clone();
+                var onnxBoxes = _onnxDetector.Detect(src);
+                foreach (var box in onnxBoxes.Take(3))
+                {
+                    yield return ExpandAndCrop(src, box, 5);
+                }
+                if (onnxBoxes.Count > 0) yield break;
             }
 
-            // 3. Otomatik plaka bolgeleri (kenar tabanli)
-            foreach (var r in DetectPlateRegionsByEdges(src))
-                yield return r;
+            // 0b. Haar cascade - varsa SADECE onun bolgeleri (tam goruntu KULLANILMAZ:
+            //     ekrandaki "GIRIS"/"CIKIS" tabela yazilarini plaka sanir)
+            if (_haarDetector.IsAvailable)
+            {
+                var haarBoxes = _haarDetector.Detect(src);
+                foreach (var box in haarBoxes.Take(5))
+                {
+                    yield return ExpandAndCrop(src, box, 5);
+                }
+                // Haar bulamadiysa fallback'e gec - ama tam goruntu OCR'i yapma
+            }
 
-            // 4. Beyaz/sari plaka bolgeleri (HSV tabanli)
-            foreach (var r in DetectPlateRegionsByColor(src))
+            // Fallback: edge + renk tabanli kirpilmis bolgeler (tabela yazilari icermez)
+            int count = 0;
+            foreach (var r in DetectPlateRegionsByEdges(src).Take(5))
+            {
+                yield return r; count++;
+                if (count >= 5) break;
+            }
+            foreach (var r in DetectPlateRegionsByColor(src).Take(3))
+            {
                 yield return r;
+            }
+        }
+
+        private static Mat ExpandAndCrop(Mat src, OcvRect box, int pad)
+        {
+            int x = Math.Max(0, box.X - pad);
+            int y = Math.Max(0, box.Y - pad);
+            int w = Math.Min(src.Cols - x, box.Width + 2 * pad);
+            int h = Math.Min(src.Rows - y, box.Height + 2 * pad);
+            return new Mat(src, new OcvRect(x, y, w, h)).Clone();
         }
 
         private static List<Mat> DetectPlateRegionsByEdges(Mat src)
@@ -303,37 +353,27 @@ namespace Otopark.Client.Helpers
         // ===== PREPROCESSING =====
 
         /// <summary>
-        /// Bir bolge icin 6 farkli preprocessing varyanti uretir.
+        /// Bir bolge icin 3 hizli preprocessing varyanti.
+        /// (Coklu varyant cok yavasti - bolge basina ~18 OCR cagrisi yapiyordu)
         /// </summary>
         private static IEnumerable<Mat> PreprocessVariants(Mat region)
         {
-            // Plaka boyutuna olceklendir
             using var resized = ScaleForOcr(region);
 
-            // Gri ton
             using var gray = new Mat();
             if (resized.Channels() > 1)
                 Cv2.CvtColor(resized, gray, ColorConversionCodes.BGR2GRAY);
             else
                 resized.CopyTo(gray);
 
-            // 1. CLAHE + Otsu (klasik)
+            // 1. CLAHE + Otsu (klasik beyaz zemin/siyah yazi)
             yield return PreprocessOtsu(gray, false);
 
-            // 2. CLAHE + Otsu inverted (siyah zemin uzerine beyaz yazi)
-            yield return PreprocessOtsu(gray, true);
-
-            // 3. Adaptive threshold (Gaussian) - degisken aydinlik icin
+            // 2. Adaptive threshold (degisken aydinlik)
             yield return PreprocessAdaptive(gray, false);
 
-            // 4. Adaptive threshold inverted
-            yield return PreprocessAdaptive(gray, true);
-
-            // 5. Sharpen + Otsu (bulanik resimler icin)
+            // 3. Sharpen + Otsu (bulanik gorintuler)
             yield return PreprocessSharpen(gray);
-
-            // 6. Bilateral filter + Otsu (gurultulu resimler icin)
-            yield return PreprocessBilateral(gray);
         }
 
         private static Mat ScaleForOcr(Mat src)
@@ -435,10 +475,10 @@ namespace Otopark.Client.Helpers
 
                     if (plate.Length < 5 || plate.Length > 10) return null;
 
-                    // Tesseract guven skoru (0-1) - format duzeltme aktif oldugu icin
-                    // dusuk skorlari da kabul et, en iyi format-match aday secilir.
+                    // Tesseract ham guven skoru (0-1). Cok dusuk skorlar genelde
+                    // halusinasyon (tabela yazisi, gurultu) - reddet.
                     double score = page.GetMeanConfidence();
-                    if (score < 0.10) return null;
+                    if (score < 0.30) return null;
 
                     return new Candidate(plate, score);
                 }
@@ -526,6 +566,8 @@ namespace Otopark.Client.Helpers
             if (!_disposed)
             {
                 _engine?.Dispose();
+                _onnxDetector?.Dispose();
+                _haarDetector?.Dispose();
                 _disposed = true;
             }
         }

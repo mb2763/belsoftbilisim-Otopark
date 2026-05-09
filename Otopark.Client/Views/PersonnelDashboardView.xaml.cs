@@ -43,10 +43,12 @@ namespace Otopark.Client.Views
             "2059e14b4a694207a913240af6da257abd38092e",
         };
 
-        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
-        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.55, windowSeconds: 4.0, neededHits: 1);
-        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 8.0);
-        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 8.0);
+        // 2-hit gerekli (stabilizer icinde minimum), 6sn pencere - tek frame halusinasyonu engeller
+        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.40, windowSeconds: 6.0, neededHits: 2);
+        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.40, windowSeconds: 6.0, neededHits: 2);
+        // Suppress: araclar genellikle 5-15 saniye kamerada kalir. 30sn ile coklu kayit onlenir.
+        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 30.0);
+        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 30.0);
 
         // Birincil: PlateRecognizer Cloud API (coklu token rotasyonu)
         private readonly PlateRecognizerClient _client = new(LoadTokensFromConfig());
@@ -271,7 +273,9 @@ namespace Otopark.Client.Views
             if (!await WaitUntilFileReady(path, _cts.Token)) return;
 
             var gate = isEntry ? _entryGate : _exitGate;
-            if (!await gate.WaitAsync(0)) return;
+            // Bekle (max 500ms): mesgulse pas gec - timer zaten son dosyayi yakalar.
+            // 2000ms cok uzun, kuyruk birikiyordu.
+            if (!await gate.WaitAsync(500, _cts.Token)) return;
 
             try
             {
@@ -354,13 +358,20 @@ namespace Otopark.Client.Views
                 string plate = best.Value.Plate;
                 double score = best.Value.Score;
 
+                // Turk plaka formati ZORUNLU - rastgele OCR ciktilarini engeller
+                if (!PlateRules.IsLikelyTurkishPlate(plate))
+                {
+                    Log($"[{side}] Red (TR formati degil): '{plate}' skor={score:F2}");
+                    return;
+                }
+
                 if (!PlateRules.IsLikelyPlate(plate))
                 {
                     Log($"[{side}] Red (format/kelime): '{plate}' skor={score:F2}");
                     return;
                 }
 
-                if (score < 0.55)
+                if (score < 0.40)
                 {
                     Log($"[{side}] Red (skor dusuk): '{plate}' skor={score:F2}");
                     return;
@@ -456,12 +467,27 @@ namespace Otopark.Client.Views
             catch (Exception ex) { Log($"[{side}] Detect hata: {ex.Message}"); }
         }
 
-        // Once API'yi dene; basarisizsa (timeout/kota/network) yedek olarak lokal OCR
+        // LOCAL-FIRST mod: Once lokal OCR'i dene, yetmezse API'ye gec (kota tasarrufu)
         private async Task<(string Plate, double Score)?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
+            // 1) Lokal OCR (Tesseract + Haar) - bedava, kota yok.
+            //    LocalPlateRecognizer artik SADECE TR formatina uyan sonuc dondurur.
+            PlateRecognitionResult? localResult = null;
+            if (_recognizer != null)
+            {
+                localResult = await _recognizer.RecognizeAsync(imagePath, ct);
+                if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
+                {
+                    var normalized = PlateRules.Normalize(localResult.Plate);
+                    if (PlateRules.IsLikelyTurkishPlate(normalized))
+                        return (normalized, localResult.Score);
+                }
+            }
+
+            // 2) Lokal yetmedi - API yedek (kota varsa)
             try
             {
-                var r = await _client.RecognizeAsync(imagePath, null, ct);
+                var r = await _client.RecognizeAsync(imagePath, "tr", ct);
                 if (r != null && !string.IsNullOrWhiteSpace(r.Plate))
                 {
                     var plate = PlateRules.Normalize(r.Plate);
@@ -470,15 +496,14 @@ namespace Otopark.Client.Views
             }
             catch (Exception ex)
             {
-                Log($"API hata, lokal yedege geciliyor: {ex.Message}");
+                Log($"API hata: {ex.Message}");
             }
 
-            // Yedek: lokal OCR
-            if (_recognizer != null)
+            // 3) API de yetmedi - lokal sonucu varsa onu dondur (eski 0.70 esiginin altinda kalsa bile)
+            if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
             {
-                var local = await _recognizer.RecognizeAsync(imagePath, ct);
-                if (local != null && !string.IsNullOrWhiteSpace(local.Plate))
-                    return (local.Plate, local.Score);
+                var normalized = PlateRules.Normalize(localResult.Plate);
+                return (normalized, localResult.Score);
             }
 
             return null;
@@ -598,7 +623,7 @@ namespace Otopark.Client.Views
                 var r = await RecognizeWithScoreAsync(img, ct);
                 if (r == null) continue;
                 if (!PlateRules.IsLikelyPlate(r.Value.Plate)) continue;
-                if (r.Value.Score < 0.55) continue;
+                if (r.Value.Score < 0.40) continue;
                 if (best == null || r.Value.Score > best.Value.Score)
                     best = (r.Value.Plate, r.Value.Score, img);
             }

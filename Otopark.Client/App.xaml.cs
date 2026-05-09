@@ -6,6 +6,8 @@ using Otopark.Client.Views;
 using Otopark.Core;
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -13,6 +15,12 @@ namespace Otopark.Client;
 
 public partial class App : Application
 {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint dwFlags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeLibrary(IntPtr hModule);
+
     private IHost? _host;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -30,6 +38,26 @@ public partial class App : Application
             LogCrash("Task", ex.Exception);
             ex.SetObserved();
         };
+
+        // OpenCvSharp native DLL (OpenCvSharpExtern.dll + VC++ runtime) self-test.
+        // Native DLL yoksa lokal OCR motoru calisamaz; kullaniciya net mesaj gosterip
+        // uygulamayi sadece API ile baslat. Crash etmesini onlerizki finalizer thread'de
+        // GC.Collect() patlamasin.
+        if (!OpenCvNativeSelfTest(out var nativeError))
+        {
+            MessageBox.Show(
+                "OpenCvSharp native kutuphanesi yuklenemedi:\n\n" + nativeError +
+                "\n\nGerekli adimlar:\n" +
+                "1) Visual C++ Redistributable x64 yukleyin:\n" +
+                "   https://aka.ms/vs/17/release/vc_redist.x64.exe\n\n" +
+                "2) EXE'nin yaninda OpenCvSharpExtern.dll oldugundan emin olun.\n" +
+                "   (publish veya debug klasoru kopyalanirken runtimes/win-x64/native\n" +
+                "    alt klasoru atlanmis olabilir.)\n\n" +
+                "Uygulama lokal plaka tanima motoru olmadan calisacak.",
+                "Plaka tanima motoru baslatilmadi",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
 
         _host = Host.CreateDefaultBuilder()
             .ConfigureServices(services =>
@@ -76,6 +104,32 @@ public partial class App : Application
         mainWindow.Show();
 
         base.OnStartup(e);
+    }
+
+    /// <summary>
+    /// OpenCvSharp native DLL'i (OpenCvSharpExtern.dll) yuklenebiliyor mu test eder.
+    /// 1x1 piksellik bir Mat olusturup serbest birakir; native call patlarsa false doner.
+    /// </summary>
+    private static bool OpenCvNativeSelfTest(out string error)
+    {
+        try
+        {
+            using var m = new OpenCvSharp.Mat(1, 1, OpenCvSharp.MatType.CV_8UC1);
+            error = "";
+            return !m.Empty();
+        }
+        catch (Exception ex)
+        {
+            error = ex.GetType().Name + ": " + ex.Message;
+            try
+            {
+                Directory.CreateDirectory(@"C:\Otopark");
+                File.AppendAllText(@"C:\Otopark\log.txt",
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | OpenCv self-test FAILED: {error}{Environment.NewLine}");
+            }
+            catch { }
+            return false;
+        }
     }
 
     private static void LogCrash(string source, Exception? ex)
