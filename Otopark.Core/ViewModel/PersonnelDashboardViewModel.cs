@@ -78,10 +78,19 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     [ObservableProperty] private string plateSearchText = "";
 
     // Filtre: Durum
-    [ObservableProperty] private bool isStatusApproved = true;
-    [ObservableProperty] private bool isStatusUnapproved;
-    [ObservableProperty] private bool isStatusCancelled;
-    [ObservableProperty] private bool isStatusAll;
+    [ObservableProperty] private bool isStatusAllInOut = true;       // Tumu (Giris+Cikis) - yeni default
+    [ObservableProperty] private bool isStatusApproved;              // Onaylilar (cikis yapmis)
+    [ObservableProperty] private bool isStatusUnapprovedOnly;        // Onaysizlar (sadece giris yapmis)
+    [ObservableProperty] private bool isStatusUnapproved;             // Iceridekiler (cikis yapmamis - icerideki araclar)
+    [ObservableProperty] private bool isStatusCancelled;              // Iptaller
+    [ObservableProperty] private bool isStatusAll;                    // Hepsi (iptal dahil)
+
+    partial void OnIsStatusAllInOutChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusApprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusUnapprovedOnlyChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusUnapprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusCancelledChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusAllChanged(bool value) { if (value) ApplyFiltersInternal(); }
 
     // Filtre: Zaman
     [ObservableProperty] private bool isTimeShift = true;
@@ -133,6 +142,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     // Popup event: plaka kayitli degilse code-behind popup acar
     // string=plate, return: true=kayit yapildi, false=iptal
     public event Func<string, LookupApiService, Task<bool>>? OnVehicleRegistrationRequired;
+
+    // Onay dialog event'i (code-behind WPF MessageBox acar)
+    public event Func<string, string, Task<bool>>? OnConfirmRequired;
 
     public LookupApiService LookupApi => _lookupApi;
 
@@ -295,6 +307,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         var plate = EntryDetectedPlate.Trim();
         var photo = _entryPendingPhotoBase64;
 
+        // Son 5 dakikada benzer (Levenshtein <= 2) aktif giris var mi?
+        // OCR farkli okumus olabilir (33BAT102 vs 33BT1021 gibi) - duplicate kayit onlenir.
+        var recentSimilar = _allVehicles
+            .Where(v => v.ExitDateTime == null && v.ParkType != "Iptal")
+            .Where(v => (DateTime.Now - v.EntryDateTime).TotalMinutes <= 5)
+            .Select(v => new { Row = v, Dist = LevenshteinDistance(v.Plate, plate) })
+            .Where(x => x.Dist <= 2)
+            .OrderBy(x => x.Dist)
+            .FirstOrDefault();
+
+        if (recentSimilar != null)
+        {
+            var dk = (int)(DateTime.Now - recentSimilar.Row.EntryDateTime).TotalMinutes;
+            ShowToast($"Bu arac zaten icerde: {recentSimilar.Row.Plate} ({dk} dk once giris yapti).", false);
+            return;
+        }
+
         try
         {
             // 1. Once plaka kayitli mi sorgula
@@ -302,21 +331,18 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             if (vehicleCheck?.Result == null)
             {
-                // Plaka kayitli degil - popup ac
-                if (OnVehicleRegistrationRequired != null)
+                // Plaka kayitli degil - OTOMATIK KAYIT (otomobil + bolgenin tarifesi).
+                // Onceden popup acilirdi; artik personel beklemeden hizli giris.
+                var autoOk = await TryAutoRegisterVehicleAsync(plate);
+                if (!autoOk)
                 {
-                    var registered = await OnVehicleRegistrationRequired.Invoke(plate, _lookupApi);
-                    if (!registered)
-                    {
-                        ShowToast("Arac kaydi iptal edildi.", false);
-                        return;
-                    }
-                    // Kayit sonrasi verileri tekrar cek
-                    vehicleCheck = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
+                    ShowToast($"{plate} icin otomatik arac kaydi yapilamadi.", false);
+                    return;
                 }
-                else
+                vehicleCheck = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
+                if (vehicleCheck?.Result == null)
                 {
-                    ShowToast("Plaka sistemde kayitli degil.", false);
+                    ShowToast("Otomatik kayit sonrasi arac dogrulanamadi.", false);
                     return;
                 }
             }
@@ -381,11 +407,36 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 EntryPlateImagePath = imgPath,
                 OldDebt = (decimal)(veh?.Balance ?? 0),
                 CurrentDebt = 0,
+                EntryType = "N",        // default Normal
+                IsSubscriber = false,
             };
 
             _allVehicles.Insert(0, row);
             UpdateParkCounts();
             ApplyFiltersInternal();
+
+            // ===== ARACIN ABONELIK DURUMUNU API'DEN KONTROL ET =====
+            // A (abone, yesil) ya da N (normal, sari) badge'i + abonelik turu
+            try
+            {
+                var subResp = await _vehicleApi.CheckSubscriptionAsync(row.Plate, UserSession.CompanyId);
+                if (subResp != null && subResp.IsSubscriber)
+                {
+                    row.IsSubscriber = true;
+                    row.EntryType = "A";
+                    row.SubscriptionName = subResp.SubscriptionName ?? "";
+                }
+                else
+                {
+                    row.IsSubscriber = false;
+                    row.EntryType = "N";
+                    row.SubscriptionName = "";
+                }
+            }
+            catch
+            {
+                // hata olursa default (N) kalir
+            }
 
             // Giris basarili - tarife ucretini cek ve aracı borclandir
             if (entry?.Id > 0)
@@ -469,6 +520,101 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         if (row == null) return;
         if (OnCorrectPlateRequested != null)
             await OnCorrectPlateRequested.Invoke(row);
+    }
+
+    // ===== OTOMATIK KAYIT =====
+
+    // Cache'le, her giriste lookup tekrarlanmasin
+    private long _cachedAutoVehicleTypeId;
+    private long _cachedAutoTariffId;
+    private decimal _cachedDailyFee = -1m;
+
+    /// <summary>
+    /// Plakayi otomatik olarak kaydeder: arac turu = OTOMOBIL, tarife = "Kapali" iceren ilk tarife.
+    /// Personel popup'i ile mudahalesi yok.
+    /// </summary>
+    private async Task<bool> TryAutoRegisterVehicleAsync(string plate)
+    {
+        try
+        {
+            await EnsureAutoDefaultsAsync();
+            if (_cachedAutoVehicleTypeId == 0 || _cachedAutoTariffId == 0) return false;
+
+            var req = new AddVehicleRequest
+            {
+                CurrentUserId = UserSession.UserId,
+                Plate = plate,
+                CompanyId = UserSession.CompanyId,
+                CustomerCompanyId = null,
+                VehicleTypeId = _cachedAutoVehicleTypeId,
+                TariffId = _cachedAutoTariffId
+            };
+
+            var result = await _lookupApi.AddVehicleAsync(req);
+            if (result?.Errors != null && result.Errors.Count > 0) return false;
+            return result?.Result != null;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Arac turu (OTOMOBIL) ve "Kapali Otopark" tarifesini lookup'tan bulur, cache'ler.
+    /// Gunluk ucret de tarifeden alinir (varsa).
+    /// </summary>
+    private async Task EnsureAutoDefaultsAsync()
+    {
+        if (_cachedAutoVehicleTypeId != 0 && _cachedAutoTariffId != 0) return;
+        try
+        {
+            var types = await _lookupApi.GetVehicleTypesAsync(UserSession.CompanyId);
+            var auto = types.FirstOrDefault(t =>
+                t.VehicleTypeName != null && t.VehicleTypeName.Contains("OTOMOBIL", StringComparison.OrdinalIgnoreCase));
+            _cachedAutoVehicleTypeId = auto?.Id ?? (types.FirstOrDefault()?.Id ?? 0);
+
+            var tariffs = await _lookupApi.GetTariffsAsync(UserSession.CompanyId);
+            var closed = tariffs.FirstOrDefault(t => t.TariffName != null &&
+                t.TariffName.Contains("Kapal", StringComparison.OrdinalIgnoreCase));
+            _cachedAutoTariffId = closed?.Id ?? 422; // 422 = "Kapali Otopark" varsayilan
+        }
+        catch { /* lookup yetersiz - sonraki cagride tekrar denenir */ }
+    }
+
+    // ===== IPTAL =====
+
+    [RelayCommand]
+    private async Task CancelEntryAsync(VehicleRow? row)
+    {
+        if (row == null) return;
+        if (row.EntryId <= 0) { ShowToast("Giris Id bulunamadi.", false); return; }
+        if (row.ExitDateTime != null) { ShowToast("Cikis yapilmis kayitlar iptal edilemez.", false); return; }
+        if (row.ParkType == "Iptal") { ShowToast("Bu kayit zaten iptal edilmis.", false); return; }
+
+        var ok = OnConfirmRequired != null
+            ? await OnConfirmRequired.Invoke(
+                "Iptal Onayi",
+                $"{row.Plate} plakali aracin giris kaydi iptal edilecek. Onayliyor musunuz?")
+            : true;
+        if (!ok) return;
+
+        try
+        {
+            var resp = await _vehicleApi.DeleteEntryAsync(row.EntryId, UserSession.CompanyId, UserSession.UserId);
+            if (resp?.Errors != null && resp.Errors.Count > 0)
+            {
+                var msg = string.Join(", ", resp.Errors.Where(e => !string.IsNullOrEmpty(e.Message)).Select(e => e.Message));
+                ShowToast(string.IsNullOrWhiteSpace(msg) ? "Iptal basarisiz." : msg, false);
+                return;
+            }
+
+            row.ParkType = "Iptal";
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+            ShowToast($"{row.Plate} giris kaydi iptal edildi.", true);
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Iptal hatasi: " + ex.Message, false);
+        }
     }
 
     /// <summary>
@@ -561,119 +707,236 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         try
         {
+            // 1. Plaka kayitli mi? Degilse otomatik kayit yap.
             var response = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
-
-            if (response == null)
+            if (response?.Result == null)
             {
-                ShowToast("Sunucudan yanit alinamadi.", false);
-                return;
-            }
-
-            if (response.Errors != null && response.Errors.Count > 0)
-            {
-                var errorMsg = string.Join(", ", response.Errors
-                    .Where(e => !string.IsNullOrEmpty(e.Message))
-                    .Select(e => e.Message));
-                ShowToast(string.IsNullOrWhiteSpace(errorMsg)
-                    ? "Arac sorgulanamadi." : errorMsg, false);
-                return;
+                var autoOk = await TryAutoRegisterVehicleAsync(plate);
+                if (!autoOk) { ShowToast($"{plate} otomatik kayit basarisiz.", false); return; }
+                response = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
+                if (response?.Result == null) { ShowToast("Arac dogrulanamadi.", false); return; }
             }
 
             var vehicle = response.Result;
-            if (vehicle == null)
+
+            // 2. Aktif giris var mi?
+            var existingRow = _allVehicles.FirstOrDefault(v =>
+                string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+                v.ExitDateTime == null && v.ParkType != "Iptal");
+
+            long entryId = existingRow?.EntryId ?? 0;
+            if (entryId == 0)
             {
-                ShowToast("Arac bulunamadi.", false);
+                try
+                {
+                    var parkData = await _parkQuery.GetByZoneTodayAsync(UserSession.CompanyId, BolgeId);
+                    var parkEntry = parkData.FirstOrDefault(p =>
+                        string.Equals(p.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+                        p.ExitTimestamp == null);
+                    entryId = parkEntry?.EntryId ?? 0;
+                }
+                catch { }
+            }
+
+            // 3. Giris yoksa OTOMATIK GIRIS olustur (15 dk oncesine).
+            if (entryId == 0)
+            {
+                ShowToast($"{plate} icin giris kaydi yok, 15 dk oncesine otomatik giris olusturuluyor.", true);
+                entryId = await CreateAutoBackdatedEntryAsync(plate, vehicle);
+                if (entryId == 0) { ShowToast("Otomatik giris olusturulamadi.", false); return; }
+            }
+
+            // 4. Borc kontrolu - tum bolge borclari + bu bolgeye ait borc.
+            var creditInfo = await GetVehicleDebtsAsync(vehicle.Id);
+            decimal zoneDebt = creditInfo.zoneDebt;
+            decimal totalDebt = creditInfo.totalDebt;
+
+            // 5. Gunluk ucret hesabi: gece 23:59'i geçtiyse her gun icin gunluk ucret eklenir.
+            var entryRow = _allVehicles.FirstOrDefault(v => v.EntryId == entryId);
+            DateTime entryTs = entryRow?.EntryDateTime ?? DateTime.Now.AddMinutes(-15);
+            int extraDays = ComputeOvernightDays(entryTs, DateTime.Now);
+            if (extraDays > 0 && _cachedDailyFee > 0)
+            {
+                decimal additionalFee = extraDays * _cachedDailyFee;
+                zoneDebt += additionalFee;
+                totalDebt += additionalFee;
+                // Backend'e ekleyelim ki kayit tutulsun
+                try
+                {
+                    await _vehicleApi.AddVehicleCreditAsync(new AddVehicleCreditRequest
+                    {
+                        CurrentUserId = UserSession.UserId,
+                        VehicleDefinitionId = vehicle.Id,
+                        DebtAmount = additionalFee.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        PaidAmount = "0",
+                        Description = $"{extraDays} gun gecikme ucreti ({_cachedDailyFee:F2} TL/gun)",
+                        CompanyId = UserSession.CompanyId,
+                        ZoneId = BolgeId,
+                        VehicleExitId = 0
+                    });
+                }
+                catch { /* borclanma hatasi cikisi bloke etmez */ }
+            }
+
+            // 6. Bu bolgeye ait borc varsa cikisi engelle.
+            if (zoneDebt > 0)
+            {
+                var msg = $"{plate} plakali aracin {LoggedZoneName} kapali otopark icin {zoneDebt:F2} TL borcu bulunmakta. Borcu odenmeden cikis yapilamaz.";
+                if (totalDebt > zoneDebt)
+                    msg += $" (Tum bolgelerdeki toplam borc: {totalDebt:F2} TL)";
+                ShowToast(msg, false);
                 return;
             }
 
-            if (vehicle.Credit <= 0)
+            // 7. Cikis API
+            var exitReq = new VehicleParkExitRequest
             {
-                var existingRow = _allVehicles.FirstOrDefault(v =>
-                    v.Plate == plate && v.ExitDateTime == null);
-
-                // EntryId tabloda yoksa API'den cek
-                long entryId = existingRow?.EntryId ?? 0;
-                if (entryId == 0)
-                {
-                    try
-                    {
-                        var parkData = await _parkQuery.GetByZoneTodayAsync(UserSession.CompanyId, BolgeId);
-                        var parkEntry = parkData.FirstOrDefault(p =>
-                            p.Plate == plate && p.ExitTimestamp == null);
-                        entryId = parkEntry?.EntryId ?? 0;
-                    }
-                    catch { }
-                }
-
-                if (entryId == 0)
-                {
-                    ShowToast("Arac giris kaydi bulunamadi.", false);
-                    return;
-                }
-
-                var exitReq = new VehicleParkExitRequest
+                CurrentUserId = UserSession.UserId,
+                VehicleEntryId = entryId,
+                PayingUserId = UserSession.UserId,
+                ExitUserId = UserSession.UserId,
+                ExitZoneId = BolgeId,
+                ExitTimeStamp = DateTime.Now,
+                CalculatedFee = "0",
+                PayableFee = "0",
+                MembershipDiscount = "0",
+                CompanyId = UserSession.CompanyId,
+                Payment = new PaymentModel
                 {
                     CurrentUserId = UserSession.UserId,
-                    VehicleEntryId = entryId,
-                    PayingUserId = UserSession.UserId,
-                    ExitUserId = UserSession.UserId,
-                    ExitZoneId = BolgeId,
-                    ExitTimeStamp = DateTime.Now,
-                    CalculatedFee = "0",
-                    PayableFee = "0",
-                    MembershipDiscount = "0",
-                    CompanyId = UserSession.CompanyId,
-                    Payment = new PaymentModel
-                    {
-                        CurrentUserId = UserSession.UserId,
-                        ReceiptNo = 0,
-                        PaymentTypeId = 1, // NoPay - borcu yoksa odeme yapilmadan cikis
-                        AmountCash = "0",
-                        PaymentTime = DateTime.Now,
-                        CompanyId = UserSession.CompanyId
-                    }
-                };
-
-                var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
-                var json= JsonConvert.SerializeObject(exitReq);
-
-                if (exitResponse?.Errors != null && exitResponse.Errors.Count > 0)
-                {
-                    var errorMsg = string.Join(", ", exitResponse.Errors
-                        .Where(e => !string.IsNullOrEmpty(e.Message))
-                        .Select(e => e.Message));
-                    ShowToast(string.IsNullOrWhiteSpace(errorMsg)
-                        ? "Cikis kaydedilemedi." : errorMsg, false);
-                    return;
+                    ReceiptNo = 0,
+                    PaymentTypeId = 1,
+                    AmountCash = "0",
+                    PaymentTime = DateTime.Now,
+                    CompanyId = UserSession.CompanyId
                 }
+            };
 
-                if (existingRow != null)
-                {
-                    existingRow.ExitDateTime = DateTime.Now;
-                    existingRow.ExitPlateImagePath = GetFirstSnapshotPath(isEntry: false);
-                    existingRow.ParkType = "Cikis";
-                    existingRow.CurrentDebt = 0;
-                    existingRow.TotalDebt = existingRow.OldDebt;
-                }
-
-                UpdateParkCounts();
-                ApplyFiltersInternal();
-
-                if (OnOpenExitGateRequested != null)
-                    await OnOpenExitGateRequested.Invoke();
-
-                ShowToast($"{plate} cikis kaydedildi. Bariyer aciliyor...", true);
-                ExitDetectedPlate = "";
-            }
-            else
+            var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
+            if (exitResponse?.Errors != null && exitResponse.Errors.Count > 0)
             {
-                ShowToast($"{plate} borclu! ({vehicle.Credit:F2} TL) Kiosk cihazinda odemenizi gerceklestiriniz.", false);
+                var errorMsg = string.Join(", ", exitResponse.Errors
+                    .Where(e => !string.IsNullOrEmpty(e.Message))
+                    .Select(e => e.Message));
+                ShowToast(string.IsNullOrWhiteSpace(errorMsg) ? "Cikis kaydedilemedi." : errorMsg, false);
+                return;
             }
+
+            if (existingRow != null)
+            {
+                existingRow.ExitDateTime = DateTime.Now;
+                existingRow.ExitPlateImagePath = GetFirstSnapshotPath(isEntry: false);
+                existingRow.ParkType = "Cikis";
+                existingRow.CurrentDebt = 0;
+                existingRow.TotalDebt = existingRow.OldDebt;
+            }
+
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+
+            if (OnOpenExitGateRequested != null)
+                await OnOpenExitGateRequested.Invoke();
+
+            string toast = $"{plate} cikis kaydedildi. Bariyer aciliyor...";
+            if (totalDebt > 0) toast += $" (Diger bolgelerde toplam borc: {totalDebt:F2} TL)";
+            ShowToast(toast, true);
+            ExitDetectedPlate = "";
         }
         catch (Exception ex)
         {
             ShowToast("API Hatasi: " + ex.Message, false);
         }
+    }
+
+    /// <summary>
+    /// Cikista plaka var ama giris yoksa, 15 dakika oncesine geriye donuk giris olusturur.
+    /// Borc sorgulamasi bu girise gore yapilir. EntryId doner.
+    /// </summary>
+    private async Task<long> CreateAutoBackdatedEntryAsync(string plate, VewVehicleDefinition vehicle)
+    {
+        try
+        {
+            var req = new VehicleParkEntryRequest
+            {
+                Plate = plate,
+                CurrentUserId = UserSession.UserId,
+                EntryUserId = UserSession.UserId,
+                EntryZoneId = BolgeId,
+                CompanyId = UserSession.CompanyId,
+                EntryTimeStamp = DateTime.Now.AddMinutes(-15),
+                Photo = "",
+                VehicleDefinitionModel = new VehicleDefinitionModel
+                {
+                    Plate = vehicle.Plate ?? plate,
+                    CompanyId = UserSession.CompanyId,
+                    CurrentUserId = UserSession.UserId,
+                    VehicleTypeId = vehicle.VehicleTypeId,
+                    TariffId = vehicle.TariffId,
+                    CustomerCompanyId = vehicle.CustomerCompanyId ?? 0,
+                    WarningCheck = vehicle.WarningCheck ?? false,
+                    WarningNote = vehicle.WarningNote ?? ""
+                }
+            };
+            var resp = await _vehicleApi.AddEntryAsync(req);
+            if (resp?.Errors != null && resp.Errors.Count > 0) return 0;
+            return resp?.Result?.Id ?? 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Aracin tum bolgelerdeki borc bilgisini doner: (kendi bolge borcu, tum bolge toplami).
+    /// </summary>
+    private async Task<(decimal zoneDebt, decimal totalDebt)> GetVehicleDebtsAsync(long vehicleDefinitionId)
+    {
+        try
+        {
+            var credits = await _vehicleApi.GetVehicleCreditsAsync(vehicleDefinitionId);
+            decimal zone = 0, total = 0;
+            foreach (var c in credits)
+            {
+                var balance = c.DebtAmount - c.PaidAmount;
+                if (balance <= 0) continue;
+                total += balance;
+                if (c.ZoneId.HasValue && c.ZoneId.Value == BolgeId)
+                    zone += balance;
+            }
+            return (zone, total);
+        }
+        catch { return (0, 0); }
+    }
+
+    /// <summary>
+    /// Iki plaka arasinda Levenshtein (karakter edit) mesafesi.
+    /// "33BAT102" - "33BT1021" -> 3 (yakin ama farkli OCR sonucu).
+    /// "06BBD660" - "06BBD660" -> 0 (ayni).
+    /// </summary>
+    private static int LevenshteinDistance(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
+        if (string.IsNullOrEmpty(b)) return a.Length;
+        int[,] d = new int[a.Length + 1, b.Length + 1];
+        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+        for (int i = 1; i <= a.Length; i++)
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+            }
+        return d[a.Length, b.Length];
+    }
+
+    /// <summary>
+    /// Giris ile su an arasinda kac kez 23:59'u gectigini hesaplar.
+    /// 3 gun kalmissa 3 doner. (Sabit gunluk ucret bu sayiyla carpilir.)
+    /// </summary>
+    private static int ComputeOvernightDays(DateTime entryTs, DateTime nowTs)
+    {
+        var entryDate = entryTs.Date;
+        var nowDate = nowTs.Date;
+        if (nowDate <= entryDate) return 0;
+        return (nowDate - entryDate).Days;
     }
 
     [RelayCommand]
@@ -848,12 +1111,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
 
         // Durum filtresi
-        if (IsStatusApproved)
-            filtered = filtered; // Giris + cikis hepsi gelsin
+        if (IsStatusAllInOut)
+            filtered = filtered.Where(v => v.ParkType != "Iptal"); // Iptaller haric tumu
+        else if (IsStatusApproved)
+            filtered = filtered.Where(v => v.ExitDateTime != null && v.ParkType != "Iptal"); // Cikis yapilmis (onayli)
+        else if (IsStatusUnapprovedOnly)
+            filtered = filtered.Where(v => v.ExitDateTime == null && v.ParkType != "Iptal"); // Sadece girisi olan (cikis yok)
         else if (IsStatusUnapproved)
-            filtered = filtered.Where(v => v.ExitDateTime == null); // Sadece icerideki araclar
+            filtered = filtered.Where(v => v.ExitDateTime == null && v.ParkType != "Iptal"); // Iceridekiler (alias)
         else if (IsStatusCancelled)
             filtered = filtered.Where(v => v.ParkType == "Iptal");
+        // IsStatusAll -> filtre yok (iptal dahil hepsi)
 
         // Mesai filtresi (API bugunun verisini dondurur, mesai saatine gore daralt)
         if (IsTimeShift)
@@ -914,6 +1182,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         [ObservableProperty] private decimal totalDebt;
         [ObservableProperty] private string entryPlateImagePath = "";
         [ObservableProperty] private string exitPlateImagePath = "";
+
+        // Arac Giris Turu (apiden gelir): A = Abone (yesil), N = Normal (sari)
+        [ObservableProperty] private string entryType = "N";          // "A" veya "N"
+        [ObservableProperty] private bool isSubscriber;               // true => A
+        [ObservableProperty] private string subscriptionName = "";    // sadece abone ise dolu
 
         // Anlik sure hesaplama
         public void UpdateDuration()

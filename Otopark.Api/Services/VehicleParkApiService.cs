@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Otopark.Api.Services;
 
-public sealed class VehicleParkApiService
+public partial class VehicleParkApiService
 {
     private readonly HttpClient _http;
 
@@ -163,4 +163,102 @@ public class UpdatePlateResponse
 {
     public List<ErrorMessageObject>? Errors { get; set; }
     public object? Result { get; set; }
+}
+
+// ===== EK API'LER =====
+
+public partial class VehicleParkApiService
+{
+    /// <summary>
+    /// Bir arac giris kaydini siler (iptal). Backend yumusak silme yapar (IsDelete=true).
+    /// </summary>
+    public async Task<DeleteEntryResponse?> DeleteEntryAsync(long entryId, long companyId, long currentUserId)
+    {
+        var url = $"VehiclePark/DeleteVehicleParkEntry?id={entryId}&companyId={companyId}&currentUserId={currentUserId}";
+        using var response = await _http.PostAsync(url, null);
+        var json = await response.Content.ReadAsStringAsync();
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+        if (!response.IsSuccessStatusCode)
+        {
+            try
+            {
+                var err = JsonSerializer.Deserialize<DeleteEntryResponse>(json, options);
+                if (err != null) return err;
+            }
+            catch { }
+
+            return new DeleteEntryResponse
+            {
+                Errors = new List<ErrorMessageObject>
+                {
+                    new() { Message = $"{(int)response.StatusCode} - {json}" }
+                }
+            };
+        }
+        return JsonSerializer.Deserialize<DeleteEntryResponse>(json, options);
+    }
+
+    /// <summary>
+    /// Aracin tum bolgelerdeki kredi kayitlarini doner (borc + odeme detaylari).
+    /// </summary>
+    public async Task<List<VehicleCreditDto>> GetVehicleCreditsAsync(long vehicleDefinitionId)
+    {
+        var url = $"VehicleParkCredit/GetVehicleCredits?vehicleDefinitionId={vehicleDefinitionId}";
+        using var response = await _http.PostAsync(url, null);
+        if (!response.IsSuccessStatusCode) return new();
+        var json = await response.Content.ReadAsStringAsync();
+        return JsonSerializer.Deserialize<List<VehicleCreditDto>>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+    }
+
+    /// <summary>
+    /// Plakanin AKTIF aboneligi var mi kontrol eder.
+    /// Kapali Otopark Desktop arac girisinde A (yesil) / N (sari) badge icin.
+    /// </summary>
+    public async Task<SubscriptionCheckResponse> CheckSubscriptionAsync(string plate, long companyId)
+    {
+        try
+        {
+            var url = $"VehiclePark/CheckSubscription?plate={Uri.EscapeDataString(plate)}&companyId={companyId}";
+            using var response = await _http.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                return new SubscriptionCheckResponse { IsSubscriber = false };
+            var json = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<SubscriptionCheckResponse>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return result ?? new SubscriptionCheckResponse { IsSubscriber = false };
+        }
+        catch
+        {
+            return new SubscriptionCheckResponse { IsSubscriber = false };
+        }
+    }
+}
+
+public class SubscriptionCheckResponse
+{
+    public bool IsSubscriber { get; set; }
+    public string? SubscriptionName { get; set; }
+    public DateTime? FinishDate { get; set; }
+}
+
+public class DeleteEntryResponse
+{
+    public List<ErrorMessageObject>? Errors { get; set; }
+    public object? Result { get; set; }
+}
+
+public class VehicleCreditDto
+{
+    public long Id { get; set; }
+    public long VehicleDefinitionId { get; set; }
+    public long? ZoneId { get; set; }
+    public string? ZoneName { get; set; }
+    public long? VehicleExitId { get; set; }
+    public decimal DebtAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal Balance { get; set; }
+    public string? Description { get; set; }
+    public DateTime CreateDate { get; set; }
 }

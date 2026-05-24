@@ -19,140 +19,141 @@
                 <RowDefinition Height="Auto" MaxHeight="120"/>
             </Grid.RowDefinitions>
 
-            <!-- ================= TOP KPI ================= -->
-            <Border Grid.Row="0" Margin="0,0,0,10">
-                <WrapPanel Orientation="Horizontal">
+            <!-- ================= TOP BAR (KPI + Kullanici sabit sagda) ================= -->
+            <Grid Grid.Row="0" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-                    <Border MinWidth="140" Margin="4" Background="White" CornerRadius="12" Padding="12"
+                <!-- Sol: KPI'lar (WrapPanel - dar ekranda alt satira gecer) -->
+                <WrapPanel Grid.Column="0" Orientation="Horizontal">
+
+                    <Border MinWidth="115" Margin="3" Background="White" CornerRadius="10" Padding="8,6"
                             BorderBrush="#E6EAF2" BorderThickness="1">
                         <StackPanel>
-                            <TextBlock Text="Hasilat" Foreground="Gray" FontSize="11"/>
-                            <TextBlock Text="{Binding TotalRevenue, StringFormat='{}{0:F0} TL'}" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock Text="Hasilat" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding TotalRevenue, StringFormat='{}{0:F0} TL'}" FontSize="15" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
-                    <Border MinWidth="140" Margin="4" Background="White" CornerRadius="12" Padding="12"
+                    <Border MinWidth="115" Margin="3" Background="White" CornerRadius="10" Padding="8,6"
                             BorderBrush="#E6EAF2" BorderThickness="1">
                         <StackPanel>
-                            <TextBlock Text="Abonelik Hasilati" Foreground="Gray" FontSize="11"/>
-                            <TextBlock Text="{Binding SubscriptionRevenue, StringFormat='{}{0:F0} TL'}" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock Text="Abonelik" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding SubscriptionRevenue, StringFormat='{}{0:F0} TL'}" FontSize="15" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
-                    <Border MinWidth="140" Margin="4" Background="White" CornerRadius="12" Padding="12"
+                    <Border MinWidth="95" Margin="3" Background="White" CornerRadius="10" Padding="8,6"
                             BorderBrush="#E6EAF2" BorderThickness="1">
                         <StackPanel>
-                            <TextBlock Text="Otopark Kapasitesi" Foreground="Gray" FontSize="11"/>
-                            <TextBlock Text="{Binding TotalCapacity}" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock Text="Kapasite" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding TotalCapacity}" FontSize="15" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
-                    <Border MinWidth="140" Margin="4" Background="White" CornerRadius="12" Padding="12"
+                    <Border MinWidth="95" Margin="3" Background="White" CornerRadius="10" Padding="8,6"
                             BorderBrush="#E6EAF2" BorderThickness="1">
                         <StackPanel>
-                            <TextBlock Text="Arac Park Sayisi" Foreground="Gray" FontSize="11"/>
-                            <TextBlock Text="{Binding CurrentVehicleCount}" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock Text="Park Sayisi" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding CurrentVehicleCount}" FontSize="15" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
-                    <Border MinWidth="140" Margin="4" Background="White" CornerRadius="12" Padding="12"
+                    <Border MinWidth="95" Margin="3" Background="White" CornerRadius="10" Padding="8,6"
                             BorderBrush="#E6EAF2" BorderThickness="1">
                         <StackPanel>
-                            <TextBlock Text="Bos Park Sayisi" Foreground="Gray" FontSize="11"/>
-                            <TextBlock Text="{Binding EmptyParkCount}" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock Text="Bos" Foreground="Gray" FontSize="10"/>
+                            <TextBlock Text="{Binding EmptyParkCount}" FontSize="15" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
                     <Button Content="Kara Liste"
-                            MinWidth="100" Height="40" Margin="4"
+                            MinWidth="90" Height="36" Margin="3" FontSize="11"
                             Background="White" BorderBrush="#DDE3EE"
                             VerticalAlignment="Center"/>
 
                     <Button Content="Borc Kontrol"
-                            MinWidth="100" Height="40" Margin="4"
+                            MinWidth="90" Height="36" Margin="3" FontSize="11"
                             Background="White" BorderBrush="#DDE3EE"
                             VerticalAlignment="Center"/>
 
                     <!-- Kamera + Bariyer Paneli -->
-                    <Border MinWidth="150" Height="70" Margin="4"
-                            Background="White" CornerRadius="12" Padding="6"
+                    <Border MinWidth="135" Height="60" Margin="3"
+                            Background="White" CornerRadius="10" Padding="4"
                             BorderBrush="#E6EAF2" BorderThickness="1"
                             VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <!-- Kamera -->
-                            <StackPanel Margin="4">
-                                <Border Width="60" Height="26" Background="#D9F0FF" CornerRadius="8">
-                                    <TextBlock Text="Kam." FontSize="11"
+                            <StackPanel Margin="3">
+                                <Border Width="52" Height="22" Background="#D9F0FF" CornerRadius="6">
+                                    <TextBlock Text="Kam." FontSize="10"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                    <Button Content="G" Width="26" Height="20"
-                                            Background="#5ACF90" Foreground="White" FontSize="10" Margin="1"
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <Button Content="G" Width="22" Height="18"
+                                            Background="#5ACF90" Foreground="White" FontSize="9" Margin="1"
                                             Click="EntryCapture_Click"/>
-                                    <Button Content="C" Width="26" Height="20"
-                                            Background="#5ACF90" Foreground="White" FontSize="10" Margin="1"
+                                    <Button Content="C" Width="22" Height="18"
+                                            Background="#5ACF90" Foreground="White" FontSize="9" Margin="1"
                                             Click="ExitCapture_Click"/>
                                 </StackPanel>
                             </StackPanel>
-                            <!-- Bariyer -->
-                            <StackPanel Margin="4">
-                                <Border Width="60" Height="26" Background="#F2E6FF" CornerRadius="8">
-                                    <TextBlock Text="Bar." FontSize="11"
+                            <StackPanel Margin="3">
+                                <Border Width="52" Height="22" Background="#F2E6FF" CornerRadius="6">
+                                    <TextBlock Text="Bar." FontSize="10"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                                    <Button Content="G" Width="26" Height="20"
-                                            Background="#444" Foreground="White" FontSize="10" Margin="1"
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <Button Content="G" Width="22" Height="18"
+                                            Background="#444" Foreground="White" FontSize="9" Margin="1"
                                             Click="BarrierEntry_Click"/>
-                                    <Button Content="C" Width="26" Height="20"
-                                            Background="#444" Foreground="White" FontSize="10" Margin="1"
+                                    <Button Content="C" Width="22" Height="18"
+                                            Background="#444" Foreground="White" FontSize="9" Margin="1"
                                             Click="BarrierExit_Click"/>
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
                     </Border>
-
-                    <!-- Kullanici + Logout -->
-                    <Border Background="White" CornerRadius="12"
-                            BorderBrush="#E6EAF2" BorderThickness="1"
-                            Padding="10" Margin="4"
-                            MinWidth="240" Height="70"
-                            VerticalAlignment="Center">
-                        <StackPanel VerticalAlignment="Center">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel>
-                                    <TextBlock FontSize="11" TextTrimming="CharacterEllipsis">
-                                        <Run Text="Hosgeldin, " Foreground="Gray"/>
-                                        <Run Text="{Binding LoggedUserName}" FontWeight="Bold" Foreground="#1B2B4A"/>
-                                    </TextBlock>
-                                    <TextBlock FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis">
-                                        <Run Text="Bolge: " Foreground="Gray"/>
-                                        <Run Text="{Binding LoggedZoneName}" FontWeight="SemiBold" Foreground="#2B7CFF"/>
-                                    </TextBlock>
-                                </StackPanel>
-                                <Button Grid.Column="1" Content="Cikis"
-                                        Height="26" Padding="12,0"
-                                        Background="#FF5A5A" Foreground="White"
-                                        FontSize="11" BorderThickness="0" Cursor="Hand"
-                                        Command="{Binding LogoutCommand}" Margin="8,0,0,0"
-                                        VerticalAlignment="Center"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
                 </WrapPanel>
-            </Border>
+
+                <!-- Sag: Kullanici + Bolge + Cikis (SABIT) -->
+                <Border Grid.Column="1" Background="White" CornerRadius="10"
+                        BorderBrush="#E6EAF2" BorderThickness="1"
+                        Padding="10,6" Margin="3"
+                        MinWidth="220" Height="60"
+                        VerticalAlignment="Center">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock FontSize="11" TextTrimming="CharacterEllipsis">
+                                <Run Text="Hosgeldin, " Foreground="Gray"/>
+                                <Run Text="{Binding LoggedUserName}" FontWeight="Bold" Foreground="#1B2B4A"/>
+                            </TextBlock>
+                            <TextBlock FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis">
+                                <Run Text="Bolge: " Foreground="Gray"/>
+                                <Run Text="{Binding LoggedZoneName}" FontWeight="SemiBold" Foreground="#2B7CFF"/>
+                            </TextBlock>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Cikis"
+                                Height="26" Padding="12,0"
+                                Background="#FF5A5A" Foreground="White"
+                                FontSize="11" BorderThickness="0" Cursor="Hand"
+                                Command="{Binding LogoutCommand}" Margin="8,0,0,0"
+                                VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </Grid>
 
             <!-- ================= MIDDLE: LEFT + RIGHT ================= -->
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="2.5*" MinWidth="500"/>
-                    <ColumnDefinition Width="10"/>
-                    <ColumnDefinition Width="1.5*" MinWidth="300"/>
+                    <ColumnDefinition Width="3.5*" MinWidth="780"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="1*" MinWidth="260"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- ================= LEFT PANEL ================= -->
@@ -164,8 +165,8 @@
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto" MaxHeight="270"/>
+                            <RowDefinition Height="*" MinHeight="200"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
@@ -202,14 +203,14 @@
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
                                   HeadersVisibility="Column"
-                                  RowHeight="55"
-                                  ColumnHeaderHeight="32"
-                                  FontSize="12"
+                                  RowHeight="42"
+                                  ColumnHeaderHeight="28"
+                                  FontSize="11"
                                   BorderBrush="#E6EAF2"
                                   GridLinesVisibility="Horizontal"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto"
                                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                  Margin="0,0,0,8">
+                                  Margin="0,0,0,6">
 
                             <DataGrid.RowStyle>
                                 <Style TargetType="DataGridRow">
@@ -225,17 +226,49 @@
                             </DataGrid.RowStyle>
 
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="PLAKA" Binding="{Binding Plate}" Width="100" FontWeight="Bold"/>
-                                <DataGridTextColumn Header="OTOPARK" Binding="{Binding ParkingName}" Width="*"/>
-                                <DataGridTextColumn Header="SURE" Binding="{Binding DurationText}" Width="80"/>
-                                <DataGridTextColumn Header="PARK TIPI" Binding="{Binding ParkType}" Width="80"/>
-                                <DataGridTextColumn Header="GIRIS TARIH/SAAT" Binding="{Binding EntryDateTime}" Width="140"/>
+                                <DataGridTextColumn Header="PLAKA" Binding="{Binding Plate}" Width="85" FontWeight="Bold"/>
 
-                                <DataGridTemplateColumn Header="Plaka Giris" Width="120">
+                                <!-- ARAC GIRIS TURU: A (yesil) abone, N (sari) normal -->
+                                <DataGridTemplateColumn Header="GIR.TURU" Width="58">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <Border Width="110" Height="45"
-                                                    Background="#EEE" CornerRadius="6"
+                                            <Border CornerRadius="4" Padding="4,2"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#FFE57F"/>
+                                                        <Setter Property="BorderBrush" Value="#B0A040"/>
+                                                        <Setter Property="BorderThickness" Value="1"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding EntryType}" Value="A">
+                                                                <Setter Property="Background" Value="#5ACF90"/>
+                                                                <Setter Property="BorderBrush" Value="#2E8B57"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding EntryType}"
+                                                           FontWeight="Bold" FontSize="13"
+                                                           Foreground="#1B2B4A"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <!-- ABONELIK TURU: sadece abone ise dolu -->
+                                <DataGridTextColumn Header="ABONELIK" Binding="{Binding SubscriptionName}" Width="110"/>
+
+                                <DataGridTextColumn Header="OTOPARK" Binding="{Binding ParkingName}" Width="*" MinWidth="80"/>
+                                <DataGridTextColumn Header="SURE" Binding="{Binding DurationText}" Width="60"/>
+                                <DataGridTextColumn Header="TIP" Binding="{Binding ParkType}" Width="55"/>
+                                <DataGridTextColumn Header="GIRIS" Binding="{Binding EntryDateTime, StringFormat=dd.MM HH:mm}" Width="90"/>
+
+                                <DataGridTemplateColumn Header="Plk Gir" Width="90">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border Width="80" Height="38"
+                                                    Background="#EEE" CornerRadius="5"
                                                     BorderBrush="#DDD" BorderThickness="1"
                                                     Cursor="Hand" Tag="entry"
                                                     MouseLeftButtonDown="PlateImage_MouseDown">
@@ -248,13 +281,13 @@
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
 
-                                <DataGridTextColumn Header="CIKIS TARIH/SAAT" Binding="{Binding ExitDateTime}" Width="140"/>
+                                <DataGridTextColumn Header="CIKIS" Binding="{Binding ExitDateTime, StringFormat=dd.MM HH:mm}" Width="90"/>
 
-                                <DataGridTemplateColumn Header="Plaka Cikis" Width="120">
+                                <DataGridTemplateColumn Header="Plk Cik" Width="90">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <Border Width="110" Height="45"
-                                                    Background="#EEE" CornerRadius="6"
+                                            <Border Width="80" Height="38"
+                                                    Background="#EEE" CornerRadius="5"
                                                     BorderBrush="#DDD" BorderThickness="1"
                                                     Cursor="Hand" Tag="exit"
                                                     MouseLeftButtonDown="PlateImage_MouseDown">
@@ -267,17 +300,29 @@
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
 
-                                <DataGridTextColumn Header="ESKI BORC" Binding="{Binding OldDebt}" Width="80"/>
-                                <DataGridTextColumn Header="ANLIK BORC" Binding="{Binding CurrentDebt}" Width="80"/>
-                                <DataGridTextColumn Header="TOPLAM BORC" Binding="{Binding TotalDebt}" Width="90"/>
+                                <DataGridTextColumn Header="ESKI" Binding="{Binding OldDebt, StringFormat=N2}" Width="65"/>
+                                <DataGridTextColumn Header="ANLIK" Binding="{Binding CurrentDebt, StringFormat=N2}" Width="65"/>
+                                <DataGridTextColumn Header="TOPLAM" Binding="{Binding TotalDebt, StringFormat=N2}" Width="75"/>
 
-                                <DataGridTemplateColumn Header="" Width="70">
+                                <DataGridTemplateColumn Header="" Width="60">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <Button Content="Duzelt" Height="26" Margin="2"
+                                            <Button Content="Duzelt" Height="24" Margin="1"
                                                     Background="#FFB300" Foreground="White"
-                                                    BorderThickness="0" FontSize="11"
+                                                    BorderThickness="0" FontSize="10"
                                                     Command="{Binding DataContext.CorrectPlateCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTemplateColumn Header="" Width="55">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="Iptal" Height="24" Margin="1"
+                                                    Background="#E53935" Foreground="White"
+                                                    BorderThickness="0" FontSize="10"
+                                                    Command="{Binding DataContext.CancelEntryCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                     CommandParameter="{Binding}"/>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
@@ -286,43 +331,55 @@
                         </DataGrid>
 
                         <!-- Filters + Zone Cards -->
-                        <Grid Grid.Row="2" Margin="0,0,0,6">
+                        <Grid Grid.Row="2" Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Sol: Durum + Zaman filtreleri -->
-                            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
-                                <StackPanel Margin="0,0,10,0">
-                                    <Border Background="#F2F2F2" CornerRadius="8" Padding="10" Margin="0,0,0,6">
-                                        <StackPanel>
-                                            <TextBlock Text="Durum Filtresi" FontWeight="Bold" FontSize="12" Margin="0,0,0,4"/>
-                                            <RadioButton Content="Tumu (Giris+Cikis)" GroupName="Durum" IsChecked="{Binding IsStatusApproved}"/>
-                                            <RadioButton Content="Iceridekiler" GroupName="Durum" IsChecked="{Binding IsStatusUnapproved}"/>
-                                            <RadioButton Content="Iptaller" GroupName="Durum" IsChecked="{Binding IsStatusCancelled}"/>
-                                            <RadioButton Content="Hepsini" GroupName="Durum" IsChecked="{Binding IsStatusAll}"/>
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Background="#F2F2F2" CornerRadius="8" Padding="10">
-                                        <StackPanel>
-                                            <TextBlock Text="Zaman Filtresi" FontWeight="Bold" FontSize="12" Margin="0,0,0,4"/>
-                                            <RadioButton Content="Bu Mesai" GroupName="Zaman" IsChecked="{Binding IsTimeShift}"/>
-                                            <RadioButton Content="Gun" GroupName="Zaman" IsChecked="{Binding IsTimeDay}"/>
-                                            <RadioButton Content="Hafta" GroupName="Zaman" IsChecked="{Binding IsTimeWeek}"/>
-                                            <RadioButton Content="Ay" GroupName="Zaman" IsChecked="{Binding IsTimeMonth}"/>
-                                        </StackPanel>
-                                    </Border>
-                                </StackPanel>
-                            </ScrollViewer>
-
-                            <!-- Sag: Bolge kartlari (admin icin) -->
-                            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          Visibility="{Binding IsAdmin, Converter={StaticResource BoolToVis}}">
+                            <!-- Sol: Durum filtresi (kompakt) -->
+                            <Border Grid.Column="0" Background="#F2F2F2" CornerRadius="6"
+                                    Padding="6,4" Margin="0,0,4,0" VerticalAlignment="Top">
                                 <StackPanel>
-                                    <TextBlock Text="Bolge Secimi" FontWeight="Bold" FontSize="12" Margin="0,0,0,6"/>
+                                    <TextBlock Text="Durum" FontWeight="Bold" FontSize="11" Margin="0,0,0,2"/>
+                                    <RadioButton Content="Tumu" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusAllInOut}"/>
+                                    <RadioButton Content="Onaylilar (Cikis)" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusApproved}"/>
+                                    <RadioButton Content="Onaysizlar (Giris)" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusUnapprovedOnly}"/>
+                                    <RadioButton Content="Iceridekiler" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusUnapproved}"/>
+                                    <RadioButton Content="Iptaller" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusCancelled}"/>
+                                    <RadioButton Content="Hepsini" GroupName="Durum" FontSize="11"
+                                                 IsChecked="{Binding IsStatusAll}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Orta: Zaman filtresi -->
+                            <Border Grid.Column="1" Background="#F2F2F2" CornerRadius="6"
+                                    Padding="6,4" Margin="0,0,4,0" VerticalAlignment="Top">
+                                <StackPanel>
+                                    <TextBlock Text="Zaman" FontWeight="Bold" FontSize="11" Margin="0,0,0,2"/>
+                                    <RadioButton Content="Bu Mesai" GroupName="Zaman" FontSize="11"
+                                                 IsChecked="{Binding IsTimeShift}"/>
+                                    <RadioButton Content="Gun" GroupName="Zaman" FontSize="11"
+                                                 IsChecked="{Binding IsTimeDay}"/>
+                                    <RadioButton Content="Hafta" GroupName="Zaman" FontSize="11"
+                                                 IsChecked="{Binding IsTimeWeek}"/>
+                                    <RadioButton Content="Ay" GroupName="Zaman" FontSize="11"
+                                                 IsChecked="{Binding IsTimeMonth}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Sag: Bolge kartlari - SIMDILIK GIZLI (site tarafindan yonetilecek) -->
+                            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Visibility="Collapsed">
+                                <StackPanel Margin="4,0,0,0">
+                                    <TextBlock Text="Bolge Secimi" FontWeight="Bold" FontSize="11" Margin="0,0,0,3"/>
                                     <ListBox ItemsSource="{Binding AllZones}"
                                              SelectedItem="{Binding SelectedAdminZone, Mode=TwoWay}"
                                              BorderThickness="0" Background="Transparent"
@@ -335,18 +392,18 @@
                                         </ListBox.ItemsPanel>
                                         <ListBox.ItemContainerStyle>
                                             <Style TargetType="ListBoxItem">
-                                                <Setter Property="Margin" Value="4"/>
+                                                <Setter Property="Margin" Value="2"/>
                                                 <Setter Property="Padding" Value="0"/>
                                                 <Setter Property="Template">
                                                     <Setter.Value>
                                                         <ControlTemplate TargetType="ListBoxItem">
                                                             <Border x:Name="Card"
-                                                                    MinWidth="160" Height="44"
-                                                                    CornerRadius="6"
+                                                                    MinWidth="100" Height="32"
+                                                                    CornerRadius="5"
                                                                     Background="#EDEDED"
                                                                     BorderBrush="#D6D6D6"
                                                                     BorderThickness="1"
-                                                                    Padding="8,0">
+                                                                    Padding="6,0">
                                                                 <ContentPresenter HorizontalAlignment="Center"
                                                                                   VerticalAlignment="Center"/>
                                                             </Border>
@@ -364,7 +421,7 @@
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <TextBlock Text="{Binding ZoneName}"
-                                                           FontWeight="SemiBold" FontSize="12"
+                                                           FontWeight="SemiBold" FontSize="11"
                                                            TextAlignment="Center" TextWrapping="Wrap">
                                                     <TextBlock.Style>
                                                         <Style TargetType="TextBlock">
@@ -386,126 +443,117 @@
                         </Grid>
 
                         <!-- Buttons -->
-                        <WrapPanel Grid.Row="3" HorizontalAlignment="Center" Margin="0,0,0,4">
-                            <Button Content="Cift Okuma" MinWidth="100" Margin="4" Height="32"/>
-                            <Button Content="Vazgecen" MinWidth="100" Margin="4" Height="32"/>
-                            <Button Content="Sayim Iptal" MinWidth="100" Margin="4" Height="32"/>
-                            <Button Content="Borc Sorgula" MinWidth="100" Margin="4" Height="32"/>
+                        <WrapPanel Grid.Row="3" HorizontalAlignment="Center" Margin="0,2,0,0">
+                            <Button Content="Cift Okuma" MinWidth="90" Margin="2" Height="26" FontSize="11"/>
+                            <Button Content="Vazgecen" MinWidth="90" Margin="2" Height="26" FontSize="11"/>
+                            <Button Content="Sayim Iptal" MinWidth="90" Margin="2" Height="26" FontSize="11"/>
+                            <Button Content="Borc Sorgula" MinWidth="90" Margin="2" Height="26" FontSize="11"/>
                         </WrapPanel>
 
                     </Grid>
                 </Border>
 
-                <!-- ================= RIGHT PANEL ================= -->
-                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,10">
-                    <StackPanel>
+                <!-- ================= RIGHT PANEL: ARAC GIRIS + ARAC CIKIS eşit dağılım ================= -->
+                <Grid Grid.Column="2" Margin="0,0,0,10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-                        <!-- ===== ARAC GIRIS ===== -->
-                        <Border Background="White" CornerRadius="14"
+                        <!-- ===== ARAC GIRIS (Row 0) ===== -->
+                        <Border Grid.Row="0" Background="White" CornerRadius="12"
                                 BorderBrush="#E6EAF2" BorderThickness="1"
-                                Padding="12" Margin="0,0,0,8">
+                                Padding="8" Margin="0,0,0,4">
                             <StackPanel>
-                                <TextBlock Text="ARAC GIRIS" FontWeight="Bold" FontSize="13"
-                                           Foreground="#2B7CFF" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                                <TextBlock Text="ARAC GIRIS" FontWeight="Bold" FontSize="12"
+                                           Foreground="#2B7CFF" HorizontalAlignment="Center" Margin="0,0,0,4"/>
 
-                                <WrapPanel HorizontalAlignment="Center" Margin="0,0,0,6">
-                                    <Button Content="Fis Bas/Onayla" MinWidth="110" Height="30"
-                                            Margin="3" Background="#B8EACB" FontSize="12"
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="Fis Bas" Height="28"
+                                            Margin="2" Background="#B8EACB" FontSize="11"
                                             Command="{Binding ApproveAndPrintEntryCommand}"/>
-                                    <Button Content="Onayla" MinWidth="80" Height="30"
-                                            Margin="3" Background="#B8EACB" FontSize="12"
+                                    <Button Grid.Column="1" Content="Onayla" Height="28"
+                                            Margin="2" Background="#B8EACB" FontSize="11"
                                             Command="{Binding ApproveEntryCommand}"/>
-                                </WrapPanel>
+                                </Grid>
 
-                                <TextBox Height="34"
+                                <TextBox Height="30"
                                          Text="{Binding EntryDetectedPlate, UpdateSourceTrigger=PropertyChanged}"
-                                         FontSize="16" FontWeight="Bold"
+                                         FontSize="14" FontWeight="Bold"
                                          HorizontalContentAlignment="Center"
                                          VerticalContentAlignment="Center"
-                                         Margin="0,0,0,6"/>
+                                         Margin="0,0,0,4"/>
 
-                                <Border Background="#F0F3F9" CornerRadius="10"
-                                        MinHeight="140" MaxHeight="220">
-                                    <Image Source="{Binding EntryCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=800}" Stretch="Uniform"/>
+                                <Border Background="#F0F3F9" CornerRadius="8"
+                                        MinHeight="90" MaxHeight="160">
+                                    <Image Source="{Binding EntryCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=600}" Stretch="Uniform"/>
                                 </Border>
 
-                                <WrapPanel HorizontalAlignment="Center" Margin="0,6,0,0">
-                                    <Border Width="90" Height="55" Background="#EEE" Margin="3"
-                                            CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
+                                <WrapPanel HorizontalAlignment="Center" Margin="0,4,0,0">
+                                    <Border Width="70" Height="44" Background="#EEE" Margin="2"
+                                            CornerRadius="5" BorderBrush="#DDD" BorderThickness="1">
                                         <Image Source="{Binding EntryPhoto1, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
-                                    <Border Width="90" Height="55" Background="#EEE" Margin="3"
-                                            CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
+                                    <Border Width="70" Height="44" Background="#EEE" Margin="2"
+                                            CornerRadius="5" BorderBrush="#DDD" BorderThickness="1">
                                         <Image Source="{Binding EntryPhoto2, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                 </WrapPanel>
                             </StackPanel>
                         </Border>
 
-                        <!-- ===== ARAC CIKIS ===== -->
-                        <Border Background="White" CornerRadius="14"
+                        <!-- ===== ARAC CIKIS (Row 1) ===== -->
+                        <Border Grid.Row="1" Background="White" CornerRadius="12"
                                 BorderBrush="#E6EAF2" BorderThickness="1"
-                                Padding="12">
+                                Padding="8">
                             <StackPanel>
-                                <TextBlock Text="ARAC CIKIS" FontWeight="Bold" FontSize="13"
-                                           Foreground="#E74C3C" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                                <TextBlock Text="ARAC CIKIS" FontWeight="Bold" FontSize="12"
+                                           Foreground="#E74C3C" HorizontalAlignment="Center" Margin="0,0,0,4"/>
 
-                                <WrapPanel HorizontalAlignment="Center" Margin="0,0,0,6">
-                                    <Button Content="Fis Bas/Onayla" MinWidth="110" Height="30"
-                                            Margin="3" Background="#FDDEDE" FontSize="12"
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="Fis Bas" Height="28"
+                                            Margin="2" Background="#FDDEDE" FontSize="11"
                                             Command="{Binding ApproveAndPrintExitCommand}"/>
-                                    <Button Content="Onayla" MinWidth="80" Height="30"
-                                            Margin="3" Background="#FDDEDE" FontSize="12"
+                                    <Button Grid.Column="1" Content="Onayla" Height="28"
+                                            Margin="2" Background="#FDDEDE" FontSize="11"
                                             Command="{Binding ApproveExitCommand}"/>
-                                </WrapPanel>
+                                </Grid>
 
-                                <TextBox Height="34"
+                                <TextBox Height="30"
                                          Text="{Binding ExitDetectedPlate, UpdateSourceTrigger=PropertyChanged}"
-                                         FontSize="16" FontWeight="Bold"
+                                         FontSize="14" FontWeight="Bold"
                                          HorizontalContentAlignment="Center"
                                          VerticalContentAlignment="Center"
-                                         Margin="0,0,0,6"/>
+                                         Margin="0,0,0,4"/>
 
                                 <!-- Cikis kamerasi (anlik goruntu) -->
-                                <Border Background="#FDF0F0" CornerRadius="10"
-                                        MinHeight="120" MaxHeight="180">
-                                    <Image Source="{Binding ExitCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=800}" Stretch="Uniform"/>
+                                <Border Background="#FDF0F0" CornerRadius="8"
+                                        MinHeight="90" MaxHeight="160">
+                                    <Image Source="{Binding ExitCameraImagePath, Converter={StaticResource PathToImage}, ConverterParameter=600}" Stretch="Uniform"/>
                                 </Border>
 
-                                <!-- Giris ani gorseli -->
-                                <Border Background="#EEF5FF" CornerRadius="8"
-                                        BorderBrush="#BBDEFB" BorderThickness="1"
-                                        Margin="0,5,0,0" Padding="4">
-                                    <StackPanel>
-                                        <TextBlock Text="Giris Ani Gorseli"
-                                                   FontSize="10" FontWeight="SemiBold"
-                                                   Foreground="#1565C0"
-                                                   HorizontalAlignment="Center"
-                                                   Margin="0,0,0,3"/>
-                                        <Border MinHeight="70" MaxHeight="130" CornerRadius="6"
-                                                Background="#DDE8F5">
-                                            <Image Source="{Binding ExitEntryImagePath, Converter={StaticResource PathToImage}}"
-                                                   Stretch="Uniform"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Border>
-
-                                <WrapPanel HorizontalAlignment="Center" Margin="0,6,0,0">
-                                    <Border Width="90" Height="55" Background="#EEE" Margin="3"
-                                            CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
+                                <WrapPanel HorizontalAlignment="Center" Margin="0,4,0,0">
+                                    <Border Width="70" Height="44" Background="#EEE" Margin="2"
+                                            CornerRadius="5" BorderBrush="#DDD" BorderThickness="1">
                                         <Image Source="{Binding ExitPhoto1, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
-                                    <Border Width="90" Height="55" Background="#EEE" Margin="3"
-                                            CornerRadius="6" BorderBrush="#DDD" BorderThickness="1">
+                                    <Border Width="70" Height="44" Background="#EEE" Margin="2"
+                                            CornerRadius="5" BorderBrush="#DDD" BorderThickness="1">
                                         <Image Source="{Binding ExitPhoto2, Converter={StaticResource PathToImage}}" Stretch="UniformToFill"/>
                                     </Border>
                                 </WrapPanel>
                             </StackPanel>
                         </Border>
 
-                    </StackPanel>
-                </ScrollViewer>
+                </Grid>
 
             </Grid>
 
