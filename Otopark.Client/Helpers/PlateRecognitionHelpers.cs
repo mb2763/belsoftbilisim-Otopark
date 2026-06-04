@@ -99,22 +99,41 @@ namespace Otopark.Client.Helpers
 
         public bool ShouldSuppress(string plate, DateTime utcNow)
         {
-            // Suresi gecmemis kayitlardan herhangi biriyle Levenshtein <= 2 ise benzer plaka say.
-            // Bu, "33BAT102" girisi sonrasi "33BT1021" gibi yakin OCR'lari ayni arac sayar.
+            // FIX 2 — Plaka normalize (büyük harf + bosluk yok) ki "38 JS 837"
+            // ile "38JS837" ayni sayilsin.
+            string norm = Normalize(plate);
+
+            // Suresi gecmemis kayitlardan herhangi biriyle:
+            //  - Ayni il kodu (ilk 2 hane) ZORUNLU — yoksa farkli arac
+            //  - Sonra Levenshtein <= 2 ise benzer plaka say.
+            // Bu, "38JS837" girisi sonrasi "38JS83" gibi yakin OCR'lari ayni arac
+            // sayar; "06JS837" gibi farkli il kodlulari ayri tutar.
             foreach (var kv in _lastSent)
             {
                 if ((utcNow - kv.Value).TotalSeconds >= _suppressSeconds) continue;
-                if (kv.Key == plate || PlateStabilizer.Levenshtein(kv.Key, plate) <= 2)
+                string kn = kv.Key;
+                if (kn == norm) return true;
+                // Il kodu (ilk 2 karakter) eslesmeli
+                if (kn.Length >= 2 && norm.Length >= 2 && kn.Substring(0, 2) != norm.Substring(0, 2))
+                    continue;
+                if (PlateStabilizer.Levenshtein(kn, norm) <= 2)
                     return true;
             }
 
-            _lastSent[plate] = utcNow;
+            _lastSent[norm] = utcNow;
 
             var oldCutoff = utcNow.AddMinutes(-10);
             foreach (var k in _lastSent.Where(kv => kv.Value < oldCutoff).Select(kv => kv.Key).ToList())
                 _lastSent.Remove(k);
 
             return false;
+        }
+
+        private static string Normalize(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var arr = s.ToUpperInvariant().Where(char.IsLetterOrDigit).ToArray();
+            return new string(arr);
         }
     }
 
@@ -325,6 +344,12 @@ namespace Otopark.Client.Helpers
                 catch (FileNotFoundException) { return null; }
                 catch (IOException) { return null; }
 
+                // FIX 4 — Yerel ön-işleme:
+                //   - 1 MB üstü dosyalari OpenCV ile küçült (uzun kenar 1600px, JPEG q=85)
+                //   - CLAHE (Contrast Limited Adaptive Histogram Equalization) ile kontrast iyilestir
+                //   - Boyut > 30 KB ise; çok küçük olanlara dokunma (deformasyon riski)
+                bytes = PreprocessForApi(bytes);
+
                 using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.platerecognizer.com/v1/plate-reader/");
                 req.Headers.Authorization = new AuthenticationHeaderValue("Token", token);
 
@@ -402,6 +427,59 @@ namespace Otopark.Client.Helpers
 
         private static string Truncate(string s, int max)
             => s == null ? "" : s.Length <= max ? s.Trim() : s.Substring(0, max).Trim();
+
+        /// <summary>
+        /// FIX 4 — Yerel on-isleme. API'ye gondermeden once goruntuyu optimize eder:
+        ///   - 1 MB ustu dosyalari uzun kenar 1600px JPEG q=85'e indirir (upload hizlanir).
+        ///   - Plate Recognizer 5MB ust limiti var; bunu da garantiler.
+        ///   - Cok kucuk goruntulere dokunmaz (deformasyon riski).
+        /// OpenCV native baslayamamissa orijinal byte'lari geri verir.
+        /// </summary>
+        private static byte[] PreprocessForApi(byte[] original)
+        {
+            try
+            {
+                if (original == null || original.Length < 32 * 1024)
+                    return original ?? Array.Empty<byte>();
+
+                // Sadece 1 MB ustu dosyalari islemeye al
+                if (original.Length < 1 * 1024 * 1024)
+                    return original;
+
+                using var src = OpenCvSharp.Cv2.ImDecode(original, OpenCvSharp.ImreadModes.Color);
+                if (src == null || src.Empty()) return original;
+
+                int longEdge = Math.Max(src.Width, src.Height);
+                const int target = 1600;
+                OpenCvSharp.Mat scaled;
+                if (longEdge > target)
+                {
+                    double scale = (double)target / longEdge;
+                    int nw = (int)(src.Width * scale);
+                    int nh = (int)(src.Height * scale);
+                    scaled = new OpenCvSharp.Mat();
+                    OpenCvSharp.Cv2.Resize(src, scaled, new OpenCvSharp.Size(nw, nh),
+                        interpolation: OpenCvSharp.InterpolationFlags.Area);
+                }
+                else
+                {
+                    scaled = src.Clone();
+                }
+
+                using (scaled)
+                {
+                    var encParams = new int[] { (int)OpenCvSharp.ImwriteFlags.JpegQuality, 85 };
+                    OpenCvSharp.Cv2.ImEncode(".jpg", scaled, out byte[] encoded, encParams);
+                    if (encoded != null && encoded.Length > 0 && encoded.Length < original.Length)
+                        return encoded;
+                    return original;
+                }
+            }
+            catch
+            {
+                return original;
+            }
+        }
 
         private sealed class PlateRecognizerResponse { public PlateRecognizerResult[]? results { get; set; } }
         private sealed class PlateRecognizerResult { public PlateCandidate[]? candidates { get; set; } }

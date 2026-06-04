@@ -24,14 +24,48 @@ public static class BarrierService
     private static string ExitUrl => AppConfig.Configuration["Barrier:ExitCommandUrl"] ?? "";
     private static int DelayMs => int.TryParse(AppConfig.Configuration["Barrier:DelayMs"], out var d) ? d : 100;
 
+    // FIX 1 — Bariyer cooldown'u: her bariyer (Giris/Cikis) icin son acma'dan sonra
+    // belirli sn icinde yeni acma komutu YUTULUR (false don, "cooldown" log'la).
+    // Plakaya bagli degil — kuresel: aynı araba farkli plakalarla taninsa
+    // bile bariyer dakikada sadece N kez acilir.
+    // appsettings.json "Barrier:CooldownSeconds" ile ayarlanir (default 15 sn).
+    private static int CooldownSeconds => int.TryParse(AppConfig.Configuration["Barrier:CooldownSeconds"], out var c) ? c : 15;
+    private static DateTime _lastEntryOpenUtc = DateTime.MinValue;
+    private static DateTime _lastExitOpenUtc = DateTime.MinValue;
+    private static readonly object _cooldownLock = new();
+
     public static async Task<BarrierResult> OpenEntryGateAsync()
     {
+        if (!TryEnterCooldown(isEntry: true, out int remaining))
+            return new BarrierResult(false, $"Giris bariyeri: cooldown ({remaining} sn kaldi) — komut yutuldu.");
         return await SendCommandAsync(EntryUrl, "Giris bariyeri");
     }
 
     public static async Task<BarrierResult> OpenExitGateAsync()
     {
+        if (!TryEnterCooldown(isEntry: false, out int remaining))
+            return new BarrierResult(false, $"Cikis bariyeri: cooldown ({remaining} sn kaldi) — komut yutuldu.");
         return await SendCommandAsync(ExitUrl, "Cikis bariyeri");
+    }
+
+    private static bool TryEnterCooldown(bool isEntry, out int remainingSec)
+    {
+        int cd = Math.Max(0, CooldownSeconds);
+        if (cd <= 0) { remainingSec = 0; return true; }
+        lock (_cooldownLock)
+        {
+            DateTime last = isEntry ? _lastEntryOpenUtc : _lastExitOpenUtc;
+            var elapsed = DateTime.UtcNow - last;
+            if (elapsed.TotalSeconds < cd)
+            {
+                remainingSec = (int)Math.Ceiling(cd - elapsed.TotalSeconds);
+                return false;
+            }
+            if (isEntry) _lastEntryOpenUtc = DateTime.UtcNow;
+            else _lastExitOpenUtc = DateTime.UtcNow;
+            remainingSec = 0;
+            return true;
+        }
     }
 
     private static async Task<BarrierResult> SendCommandAsync(string url, string gateName)

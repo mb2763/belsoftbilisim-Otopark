@@ -125,6 +125,19 @@ public partial class App : Application
             })
             .Build();
 
+        // FIX 3 — ImageCache disk bakimi (boot-time, background).
+        // Eski dosyalar / asiri buyuk dosyalar / 500MB+ klasor toplami temizlenir.
+        Otopark.Client.Helpers.ImageCacheCleanup.RunInBackground(msg =>
+        {
+            try
+            {
+                Directory.CreateDirectory(@"C:\Otopark");
+                File.AppendAllText(@"C:\Otopark\log.txt",
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} | {msg}{Environment.NewLine}");
+            }
+            catch { }
+        });
+
         // ✅ MainWindow aç
         var mainWindow = _host.Services.GetRequiredService<MainWindow>();
 

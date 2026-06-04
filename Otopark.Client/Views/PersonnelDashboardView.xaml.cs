@@ -21,6 +21,14 @@ namespace Otopark.Client.Views
 
         private readonly CancellationTokenSource _cts = new();
         private readonly SemaphoreSlim _entryGate = new(1, 1);
+        // FIX 5 — Snapshot throttling: ayni kameradan saniyede maksimum 2 snapshot
+        // isle (500ms minimum aralik). Kamera dakikada 100+ snapshot atinca CPU/Cloud
+        // API kotasi tasiyor — gereksiz islemleri bastan kes.
+        // appsettings.json: "Snapshot:MinIntervalMs" (default 500) ile ayarlanir.
+        private DateTime _lastEntryProcessedUtc = DateTime.MinValue;
+        private DateTime _lastExitProcessedUtc = DateTime.MinValue;
+        private static int SnapshotMinIntervalMs =>
+            int.TryParse(Otopark.Core.Services.AppConfig.Configuration["Snapshot:MinIntervalMs"], out var v) ? v : 500;
         private readonly SemaphoreSlim _exitGate = new(1, 1);
         private bool _tickBusy = false;
 
@@ -287,6 +295,19 @@ namespace Otopark.Client.Views
         private async Task OnNewImageAsync(string path, bool isEntry)
         {
             if (!IsImageFile(path)) return;
+
+            // FIX 5 — Snapshot throttling: son islemden N ms gecmediyse skip
+            int minMs = SnapshotMinIntervalMs;
+            if (minMs > 0)
+            {
+                var nowUtc = DateTime.UtcNow;
+                var last = isEntry ? _lastEntryProcessedUtc : _lastExitProcessedUtc;
+                if ((nowUtc - last).TotalMilliseconds < minMs)
+                    return; // sessiz skip — log yapma (bombardiman olmasin)
+                if (isEntry) _lastEntryProcessedUtc = nowUtc;
+                else _lastExitProcessedUtc = nowUtc;
+            }
+
             if (!await WaitUntilFileReady(path, _cts.Token)) return;
 
             var gate = isEntry ? _entryGate : _exitGate;
