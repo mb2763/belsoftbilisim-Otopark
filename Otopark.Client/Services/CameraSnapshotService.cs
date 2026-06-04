@@ -20,8 +20,10 @@ public static class CameraSnapshotService
     private static string ExitUrl => AppConfig.Configuration["CameraSnapshot:ExitSnapshotUrl"] ?? "";
     private static int SaveIntervalMs => int.TryParse(AppConfig.Configuration["CameraSnapshot:IntervalMs"], out var v) ? v : 500;
 
-    // Klasorde tutulacak maksimum dosya sayisi (eskiler silinir)
-    private const int MaxFiles = 15;
+    // Klasorde tutulacak maksimum dosya sayisi.
+    // GELISTIRME SURECINDE: silme DEVRE DISI (0 = silme yapma) - foto kaybi olmasin diye.
+    // Production'a alindiginda makul bir limit (orn. 5000-10000) konabilir.
+    private const int MaxFiles = 0;
 
     // JPEG marker'lari
     private static readonly byte[] JpegStart = { 0xFF, 0xD8 };
@@ -148,6 +150,8 @@ public static class CameraSnapshotService
 
     private static void CleanupOldFiles(string folder)
     {
+        // MaxFiles == 0 ise silme yapilmaz (gelistirme suresi).
+        if (MaxFiles <= 0) return;
         try
         {
             var files = Directory.GetFiles(folder, "snap_*.jpg")

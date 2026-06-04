@@ -31,28 +31,62 @@ namespace Otopark.Client.Helpers
         {
             if (score < _minScore) return null;
 
-            // En az 2 ardisik frame'de ayni plaka olmadan kabul edilmez.
-            // Bu, Tesseract'in tek frame'deki rastgele halusinasyonlarini engeller.
-            // Yuksek guvenli (>= 0.95) sonuclar tek hit'de kabul - PlateRecognizer Cloud API
-            // gibi guvenilir kaynaklardan gelen kesin sonuclari hareketli aracta kacirma.
-            if (score >= 0.95)
+            _buffer.Add((plate, score, utcNow));
+            var cutoff = utcNow.AddSeconds(-_windowSeconds);
+            _buffer.RemoveAll(x => x.Ts < cutoff);
+
+            // Yuksek guvenli sonuc (>= 0.90): TR formati + il kodu zaten format library
+            // tarafindan dogrulandi, ONNX OCR + consensus boost ile elde edilen yuksek skor
+            // demek tek hit'le kabul guvenli (hayalet plaka skor 0.90 ulasmaz cunku
+            // detection threshold 0.65 + TR il kodu filtresi + format library zinciri var).
+            // Hareket halindeki araclar icin kritik - sadece 1-2 frame'de net plaka olabilir.
+            if (score >= 0.90)
             {
                 _buffer.Clear();
                 return new StablePlate(plate, score);
             }
 
-            _buffer.Add((plate, score, utcNow));
-            var cutoff = utcNow.AddSeconds(-_windowSeconds);
-            _buffer.RemoveAll(x => x.Ts < cutoff);
+            // Bu plakaya yakin (Levenshtein <= 2) tum okumalari ayni "grup" say.
+            var matches = _buffer
+                .Where(x => x.Score >= _minScore && Levenshtein(x.Plate, plate) <= 2)
+                .ToList();
 
-            // 2 ardisik frame'de ayni plaka gerekli (asgari)
-            int hits = _buffer.Count(x => x.Plate == plate && x.Score >= _minScore);
             int required = Math.Max(2, _neededHits);
-            if (hits < required) return null;
+            if (matches.Count < required) return null;
 
-            var avg = _buffer.Where(x => x.Plate == plate).Average(x => x.Score);
+            // Aday secim onceligi:
+            // 1) En uzun plaka tercih edilir (eksik karakter atlamadan tam okuma).
+            // 2) Es uzunlukta en sik gorulen (consensus).
+            // 3) Es sayida ise en yuksek skorlu okuma.
+            var canonical = matches
+                .GroupBy(x => x.Plate)
+                .OrderByDescending(g => g.Key.Length)
+                .ThenByDescending(g => g.Count())
+                .ThenByDescending(g => g.Max(x => x.Score))
+                .First().Key;
+
+            var avg = matches.Average(x => x.Score);
             _buffer.Clear();
-            return new StablePlate(plate, avg);
+            return new StablePlate(canonical, avg);
+        }
+
+        /// <summary>
+        /// Iki string arasinda Levenshtein (edit) mesafesi - max optimize.
+        /// </summary>
+        public static int Levenshtein(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
+            if (string.IsNullOrEmpty(b)) return a.Length;
+            int[,] d = new int[a.Length + 1, b.Length + 1];
+            for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+            for (int i = 1; i <= a.Length; i++)
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+                    d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                }
+            return d[a.Length, b.Length];
         }
     }
 
@@ -65,9 +99,14 @@ namespace Otopark.Client.Helpers
 
         public bool ShouldSuppress(string plate, DateTime utcNow)
         {
-            if (_lastSent.TryGetValue(plate, out var last) &&
-                (utcNow - last).TotalSeconds < _suppressSeconds)
-                return true;
+            // Suresi gecmemis kayitlardan herhangi biriyle Levenshtein <= 2 ise benzer plaka say.
+            // Bu, "33BAT102" girisi sonrasi "33BT1021" gibi yakin OCR'lari ayni arac sayar.
+            foreach (var kv in _lastSent)
+            {
+                if ((utcNow - kv.Value).TotalSeconds >= _suppressSeconds) continue;
+                if (kv.Key == plate || PlateStabilizer.Levenshtein(kv.Key, plate) <= 2)
+                    return true;
+            }
 
             _lastSent[plate] = utcNow;
 
@@ -81,6 +120,7 @@ namespace Otopark.Client.Helpers
 
     internal static class PlateRules
     {
+        // Sehir kodu (01-81) + harf + rakam.
         private static readonly Regex TrPlate =
             new Regex(@"^(0[1-9]|[1-7][0-9]|8[01])[A-Z]{1,3}[0-9]{2,4}$", RegexOptions.Compiled);
 
@@ -123,8 +163,12 @@ namespace Otopark.Client.Helpers
             if (plate.Length < 5 || plate.Length > 10) return false;
             if (!plate.All(char.IsLetterOrDigit)) return false;
 
-            // TR plaka formati eslesirse direk kabul (en guclu sinyal).
-            // Bu sayede "15B1831" (06 B 1234 gibi tek harfli plakalar) reddedilmez.
+            // 70+ ulkenin format kutuphanesi - PDF'ten cikarilmis 660 plaka pattern'i.
+            // Eslesme varsa direk kabul (en guclu sinyal).
+            if (Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(plate))
+                return true;
+
+            // TR plaka formati eslesirse direk kabul (yedek).
             if (TrPlate.IsMatch(plate)) return true;
 
             int letterCount = plate.Count(char.IsLetter);
@@ -339,8 +383,8 @@ namespace Otopark.Client.Helpers
                     {
                         if (string.IsNullOrWhiteSpace(c.plate)) continue;
                         var normalized = PlateRules.Normalize(c.plate);
-                        // SADECE Turk plaka formatina uyan adaylari kabul et.
-                        if (!PlateRules.IsLikelyTurkishPlate(normalized)) continue;
+                        // 70 ulke format kutuphanesinden eslesme zorunlu.
+                        if (!Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(normalized)) continue;
                         if (best == null || c.score > best.Value.score)
                             best = (normalized, c.score);
                     }

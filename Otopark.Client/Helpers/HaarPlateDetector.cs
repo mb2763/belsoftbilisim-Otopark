@@ -78,36 +78,43 @@ namespace Otopark.Client.Helpers
 
         /// <summary>
         /// Goruntude plaka olabilecek dortgen bolgeleri dondurur. Bos liste = bulunamadi.
+        /// Thread-safe (OpenCV CascadeClassifier paralel cagrida crash verebilir).
         /// </summary>
+        private readonly object _lock = new();
         public List<OcvRect> Detect(Mat image)
         {
-            if (_classifier == null || _classifier.Empty() || image.Empty()) return new();
+            if (_classifier == null || image.Empty()) return new();
 
-            try
+            lock (_lock)
             {
-                using var gray = new Mat();
-                if (image.Channels() > 1)
-                    Cv2.CvtColor(image, gray, ColorConversionCodes.BGR2GRAY);
-                else
-                    image.CopyTo(gray);
+                try
+                {
+                    if (_classifier == null || _classifier.Empty()) return new();
 
-                using var equalized = new Mat();
-                Cv2.EqualizeHist(gray, equalized);
+                    using var gray = new Mat();
+                    if (image.Channels() > 1)
+                        Cv2.CvtColor(image, gray, ColorConversionCodes.BGR2GRAY);
+                    else
+                        image.CopyTo(gray);
 
-                var plates = _classifier.DetectMultiScale(
-                    image: equalized,
-                    scaleFactor: 1.05,
-                    minNeighbors: 3,
-                    flags: HaarDetectionTypes.ScaleImage,
-                    minSize: new Size(40, 12),
-                    maxSize: new Size(image.Cols * 3 / 4, image.Rows / 2));
+                    using var equalized = new Mat();
+                    Cv2.EqualizeHist(gray, equalized);
 
-                return plates.ToList();
-            }
-            catch (Exception ex)
-            {
-                AppLog($"Haar detect hata: {ex.Message}");
-                return new();
+                    var plates = _classifier.DetectMultiScale(
+                        image: equalized,
+                        scaleFactor: 1.05,
+                        minNeighbors: 3,
+                        flags: HaarDetectionTypes.ScaleImage,
+                        minSize: new Size(40, 12),
+                        maxSize: new Size(image.Cols * 3 / 4, image.Rows / 2));
+
+                    return plates.ToList();
+                }
+                catch (Exception ex)
+                {
+                    AppLog($"Haar detect hata: {ex.Message}");
+                    return new();
+                }
             }
         }
 

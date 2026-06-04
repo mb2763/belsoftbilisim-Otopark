@@ -43,12 +43,15 @@ namespace Otopark.Client.Views
             "2059e14b4a694207a913240af6da257abd38092e",
         };
 
-        // 2-hit gerekli (stabilizer icinde minimum), 6sn pencere - tek frame halusinasyonu engeller
-        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.40, windowSeconds: 6.0, neededHits: 2);
-        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.40, windowSeconds: 6.0, neededHits: 2);
-        // Suppress: araclar genellikle 5-15 saniye kamerada kalir. 30sn ile coklu kayit onlenir.
-        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 30.0);
-        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 30.0);
+        // Skor >= 0.90 ise stabilizer tek hit'te kabul (yeni cct_s_v2_global + TR il kodu
+        // + format library zinciri sayesinde guvenli). Dusuk skorlu (0.40-0.89) okumalar
+        // icin 2-hit gerekli. Pencere 10sn (arac gecisi tipik 3-15sn).
+        private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.40, windowSeconds: 10.0, neededHits: 2);
+        private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.40, windowSeconds: 10.0, neededHits: 2);
+        // Suppress: ayni/benzer plaka 120sn boyunca tekrar gonderilmez (Levenshtein-tolerant).
+        // 60sn cok kisaydi - ayni arac kapakta tekrar tanindiginda duplicate olabiliyordu.
+        private readonly DuplicateSuppressor _entrySuppressor = new(suppressSeconds: 120.0);
+        private readonly DuplicateSuppressor _exitSuppressor = new(suppressSeconds: 120.0);
 
         // Birincil: PlateRecognizer Cloud API (coklu token rotasyonu)
         private readonly PlateRecognizerClient _client = new(LoadTokensFromConfig());
@@ -74,6 +77,9 @@ namespace Otopark.Client.Views
         public PersonnelDashboardView()
         {
             InitializeComponent();
+
+            // ONNX modelleri arka planda indirilsin (varsa atlanir, ilk kez calisirken indirir)
+            _ = Otopark.Client.Helpers.PlateModelDownloader.EnsureModelsAsync(_cts.Token);
 
             // OCR motorunu defensif baslat - native DLL/tessdata sorununda app crash olmasin
             try
@@ -163,6 +169,17 @@ namespace Otopark.Client.Views
                             var popup = new AddVehicleWindow(lookupApi, plate);
                             popup.Owner = Window.GetWindow(this);
                             result = popup.ShowDialog() == true;
+                        });
+                        return result;
+                    };
+
+                    vm.OnConfirmRequired += async (title, msg) =>
+                    {
+                        bool result = false;
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            result = MessageBox.Show(msg, title,
+                                MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
                         });
                         return result;
                     };
@@ -358,16 +375,11 @@ namespace Otopark.Client.Views
                 string plate = best.Value.Plate;
                 double score = best.Value.Score;
 
-                // Turk plaka formati ZORUNLU - rastgele OCR ciktilarini engeller
-                if (!PlateRules.IsLikelyTurkishPlate(plate))
+                // 70 ulke plaka format kutuphanesi (PDF'ten cikarilmis) - bilinen format zorunlu.
+                // Bu rastgele OCR ciktilarini ve tabela yazilarini engeller.
+                if (!Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(plate))
                 {
-                    Log($"[{side}] Red (TR formati degil): '{plate}' skor={score:F2}");
-                    return;
-                }
-
-                if (!PlateRules.IsLikelyPlate(plate))
-                {
-                    Log($"[{side}] Red (format/kelime): '{plate}' skor={score:F2}");
+                    Log($"[{side}] Red (bilinmeyen format): '{plate}' skor={score:F2}");
                     return;
                 }
 
@@ -470,8 +482,8 @@ namespace Otopark.Client.Views
         // LOCAL-FIRST mod: Once lokal OCR'i dene, yetmezse API'ye gec (kota tasarrufu)
         private async Task<(string Plate, double Score)?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
-            // 1) Lokal OCR (Tesseract + Haar) - bedava, kota yok.
-            //    LocalPlateRecognizer artik SADECE TR formatina uyan sonuc dondurur.
+            // 1) Lokal multi-engine motor (ONNX YOLO + ONNX OCR + Tesseract+Haar) - tamamen ucretsiz.
+            //    LocalPlateRecognizer 70 ulke format kutuphanesine karsi dogrulanmis sonuc dondurur.
             PlateRecognitionResult? localResult = null;
             if (_recognizer != null)
             {
@@ -479,7 +491,7 @@ namespace Otopark.Client.Views
                 if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
                 {
                     var normalized = PlateRules.Normalize(localResult.Plate);
-                    if (PlateRules.IsLikelyTurkishPlate(normalized))
+                    if (Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(normalized))
                         return (normalized, localResult.Score);
                 }
             }

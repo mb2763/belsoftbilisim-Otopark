@@ -24,11 +24,11 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
-    <!-- OpenCvSharp 4.6 - Windows Server 2012 R2 / Windows 7+ destekli son surum.
-         4.10 Windows 10+ API'lerini gerektirdigi icin eski OS'larda yuklenmiyor. -->
-    <PackageReference Include="OpenCvSharp4" Version="4.5.5.20211231" />
-    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.5.5.20211231" />
+    <!-- Modern Windows hedef (Win 10/11/Server 2016+) - en yuksek dogruluk icin guncel paketler -->
+    <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20241108" />
     <PackageReference Include="Tesseract" Version="5.2.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +49,10 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Helpers\Plate\plate-formats.txt" />
   </ItemGroup>
 
 </Project>

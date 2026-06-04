@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using Otopark.Client.Helpers.Plate;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -12,16 +13,18 @@ using OcvRect = OpenCvSharp.Rect;
 namespace Otopark.Client.Helpers
 {
     /// <summary>
-    /// Lokal plaka tanima motoru - API'siz, Tesseract + OpenCV.
-    /// Coklu preprocessing + coklu PSM mode + format-aware character correction
-    /// ile maksimum dogruluk hedefler.
-    /// Gereksinim: C:\Otopark\tessdata\eng.traineddata
+    /// Multi-engine lokal plaka tanima pipeline'i (tamamen acik kaynak):
+    /// 1) ONNX YOLOv8 -> plaka bolgesi tespiti (varsa)
+    /// 2) Haar cascade -> plaka bolgesi tespiti (yedek)
+    /// 3) ONNX OCR (FastPlateOCR) -> karakter tanima (en yuksek dogruluk)
+    /// 4) Tesseract OCR -> karakter tanima (yedek)
+    /// 5) PlateFormatLibrary (70 ulke / 660 format) -> sonuc dogrulama + skor
+    ///
+    /// Birden fazla motor calistirilir, sonuclar oy/skor ile birlestirilir.
     /// </summary>
-    internal sealed class LocalPlateRecognizer : IDisposable
+    public sealed class LocalPlateRecognizer : IDisposable
     {
         private static readonly string TessDataPath = @"C:\Otopark\tessdata";
-        private static readonly Regex TrPlateRx =
-            new(@"^(0[1-9]|[1-7][0-9]|8[01])[A-Z]{1,3}[0-9]{2,4}$", RegexOptions.Compiled);
 
         // Karakter karisikligi haritalari (OCR sik yanilir)
         private static readonly Dictionary<char, char> LetterToDigit = new()
@@ -33,18 +36,10 @@ namespace Otopark.Client.Helpers
             ['G'] = '6',
             ['B'] = '8',
         };
-        private static readonly Dictionary<char, char> DigitToLetter = new()
-        {
-            ['0'] = 'O',
-            ['1'] = 'I',
-            ['2'] = 'Z',
-            ['5'] = 'S',
-            ['6'] = 'G',
-            ['8'] = 'B',
-        };
 
         private TesseractEngine? _engine;
         private readonly OnnxPlateDetector _onnxDetector;
+        private readonly OnnxPlateOcr _onnxOcr;
         private readonly HaarPlateDetector _haarDetector;
         private readonly object _lock = new();
         private bool _disposed;
@@ -52,43 +47,39 @@ namespace Otopark.Client.Helpers
 
         public LocalPlateRecognizer()
         {
-            // Native DLL (OpenCvSharpExtern.dll + VC++ runtime) eksikse hicbir
-            // OpenCv tipini olusturma -> finalizer thread'de native call patlamasin.
+            // Native DLL eksikse hicbir OpenCv tipini olusturma -> finalizer crash'i onle.
             if (!IsOpenCvAvailable())
             {
                 AppLog("Lokal motor: OpenCvSharp native DLL yok, devre disi.");
                 _initError = true;
                 _onnxDetector = null!;
+                _onnxOcr = null!;
                 _haarDetector = null!;
                 return;
             }
 
             _onnxDetector = new OnnxPlateDetector();
+            _onnxOcr = new OnnxPlateOcr();
             _haarDetector = new HaarPlateDetector();
-            InitEngine();
+            InitTesseract();
+
+            AppLog($"Lokal motor: ONNX-detector={_onnxDetector.IsAvailable} ONNX-OCR={_onnxOcr.IsAvailable} Haar={_haarDetector.IsAvailable} Tesseract={(_engine != null && !_initError)}");
         }
 
         private static bool IsOpenCvAvailable()
         {
-            try
-            {
-                using var m = new Mat(1, 1, MatType.CV_8UC1);
-                return !m.Empty();
-            }
+            try { using var m = new Mat(1, 1, MatType.CV_8UC1); return !m.Empty(); }
             catch { return false; }
         }
 
-        private void InitEngine()
+        private void InitTesseract()
         {
             try
             {
                 var trainedFile = Path.Combine(TessDataPath, "eng.traineddata");
                 if (!File.Exists(trainedFile))
                 {
-                    AppLog($"HATA: Tesseract veri dosyasi bulunamadi: {trainedFile}");
-                    AppLog("Lutfen su adresten eng.traineddata indirin:");
-                    AppLog("https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata");
-                    AppLog($"Ve su klasore kopyalayin: {TessDataPath}");
+                    AppLog($"Tesseract veri dosyasi yok: {trainedFile}");
                     _initError = true;
                     return;
                 }
@@ -98,7 +89,6 @@ namespace Otopark.Client.Helpers
                 _engine.SetVariable("load_system_dawg", "0");
                 _engine.SetVariable("load_freq_dawg", "0");
                 _engine.SetVariable("classify_bln_numeric_mode", "0");
-                AppLog("Lokal plaka tanima motoru hazir.");
             }
             catch (Exception ex)
             {
@@ -118,7 +108,7 @@ namespace Otopark.Client.Helpers
 
         private PlateRecognitionResult? RecognizeInternal(string imagePath)
         {
-            if (_initError || _engine == null || !File.Exists(imagePath)) return null;
+            if (_initError || !File.Exists(imagePath)) return null;
 
             Mat? src = null;
             try
@@ -126,72 +116,105 @@ namespace Otopark.Client.Helpers
                 src = Cv2.ImRead(imagePath);
                 if (src.Empty()) return null;
 
+                // 1) Plaka bolgelerini bul (ONNX > Haar > heuristic)
+                var regions = DetectPlateRegions(src);
+                if (regions.Count == 0) return null;
+
+                // Detection bulundu = arac var. Orijinal frame'i ayri klasore kopyala
+                // (gelistirme/debug icin; plaka tanindiktan sonra dosya adi guncellenir).
+                string? vehicleFramePath = TrySaveVehicleFrame(imagePath);
+
+                // 2) Her bolgeyi hem ONNX OCR hem Tesseract'a ver, en iyi sonucu bul
                 var allCandidates = new List<Candidate>();
-
-                // 1. Tum aday bolgeleri topla
-                int regionCount = 0;
-                foreach (var region in GetCandidateRegions(src))
+                foreach (var region in regions.Take(5))
                 {
-                    if (regionCount++ > 8) { region.Dispose(); break; } // max 8 bolge
-
                     using (region)
                     {
-                        // 2. Her bolge icin sinirli preprocessing (3 varyant)
-                        foreach (var preprocessed in PreprocessVariants(region))
+                        // ONNX OCR'a coklu varyant ver (orijinal + kontrast artirilmis + sharpened).
+                        // Boylece tek yanlis okuma yerine en cok consensus alan plaka kazanir.
+                        if (_onnxOcr != null && _onnxOcr.IsAvailable)
                         {
-                            using (preprocessed)
+                            foreach (var variant in OcrVariants(region))
                             {
-                                // 3. PSM SingleLine + RawLine (plaka tek satir text, fazlasi yanlis pozitif)
-                                foreach (var psm in new[] { PageSegMode.SingleLine, PageSegMode.RawLine })
+                                using (variant)
                                 {
-                                    var c = TryOcr(preprocessed, psm);
-                                    if (c == null) continue;
-                                    allCandidates.Add(c.Value);
-
-                                    // Her aday icin format-aware duzeltme de adaylara eklensin
-                                    var corrected = CorrectPlateFormat(c.Value.Plate);
-                                    if (corrected != c.Value.Plate && corrected.Length >= 5)
-                                        allCandidates.Add(new Candidate(corrected, c.Value.Score));
+                                    var (plate, score) = _onnxOcr.Recognize(variant);
+                                    var normalized = NormalizePlate(plate);
+                                    if (normalized.Length >= 5)
+                                        allCandidates.Add(new Candidate(normalized, score, "onnx"));
                                 }
                             }
                         }
 
-                        // Erken cikis: TR formati eslesen aday bulduysak yeter
-                        if (allCandidates.Any(x => TrPlateRx.IsMatch(x.Plate)))
-                            break;
+                        // Tesseract yedek
+                        if (_engine != null)
+                        {
+                            foreach (var preprocessed in PreprocessVariants(region))
+                            {
+                                using (preprocessed)
+                                {
+                                    foreach (var psm in new[] { PageSegMode.SingleLine, PageSegMode.RawLine })
+                                    {
+                                        var c = TryTesseract(preprocessed, psm);
+                                        if (c != null)
+                                        {
+                                            allCandidates.Add(c.Value);
+                                            var corrected = CorrectPlateFormat(c.Value.Plate);
+                                            if (corrected != c.Value.Plate && corrected.Length >= 5)
+                                                allCandidates.Add(new Candidate(corrected, c.Value.Score, "tess-corrected"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
                 if (allCandidates.Count == 0) return null;
 
-                // 4. Format-aware duzeltmeler ekle
-                var withCorrections = new List<Candidate>(allCandidates);
-                foreach (var c in allCandidates)
-                {
-                    var corrected = CorrectPlateFormat(c.Plate);
-                    if (corrected != c.Plate && corrected.Length >= 5)
-                        withCorrections.Add(new Candidate(corrected, c.Score));
-                }
+                // 3) SADECE gecerli TR plakalari kabul et + CONSENSUS:
+                //    Birden fazla aday TR formati eslestirirse, EN SIK gorulen plakayi sec.
+                //    Bu, ONNX OCR'in farkli varyantlarda farkli okuma yapmasi durumunda
+                //    en cok desteklenen yazimi tercih eder (yanlis pozitif azaltir).
+                var trCandidates = allCandidates
+                    .Where(c =>
+                    {
+                        var m = PlateFormatLibrary.Match(c.Plate);
+                        return m != null && m.CountryCode == "TR";
+                    })
+                    .ToList();
 
-                // 5. Aday secimi: SADECE Turk plaka formatina uyan adaylari kabul et.
-                //    Genel plaka kurali rastgele OCR ciktilarinda bile geçtigi icin kullanilmaz.
-                var best = withCorrections
-                    .Where(c => TrPlateRx.IsMatch(c.Plate))
-                    .OrderByDescending(c => c.Score)
-                    .FirstOrDefault();
+                if (trCandidates.Count == 0) return null;
 
-                if (best.Plate == null) return null;
+                // En iyi plaka secimi:
+                // 1) En uzun plaka (eksik karakter atlamadan tam okuma) - 38AIH552 > 38AH552
+                // 2) En sik tekrar eden (consensus)
+                // 3) En yuksek skorlu
+                var topGroup = trCandidates
+                    .GroupBy(c => c.Plate)
+                    .OrderByDescending(g => g.Key.Length)
+                    .ThenByDescending(g => g.Count())
+                    .ThenByDescending(g => g.Max(c => c.Score))
+                    .First();
 
-                // 6. SADECE Turk plaka formati eslesirse boost ver. Aksi halde
-                //    Tesseract'in ham guveni dosun (genelde dusuk -> downstream esikten geçemez).
-                //    Bu, "PPCD45SAT" gibi rastgele OCR ciktilarinin kabulunu onler.
-                if (!TrPlateRx.IsMatch(best.Plate))
-                    return null;
+                var winnerPlate = topGroup.Key;
+                var maxRawScore = topGroup.Max(c => c.Score);
+                var winnerSource = topGroup.OrderByDescending(c => c.Score).First().Source;
 
-                // TR plaka formati eslesti -> minimum 0.85 (downstream esik 0.40, rahat geçer)
-                double finalScore = Math.Max(0.85, Math.Min(1.0, best.Score + 0.60));
+                // Cok aday + TR + il kodu OK -> yuksek skor
+                double winnerFinal = Math.Max(0.90, Math.Min(1.0, maxRawScore + 0.55));
+                if (winnerSource == "onnx") winnerFinal = Math.Min(1.0, winnerFinal + 0.05);
+                // Birden fazla aday ayni plakayi soyledi -> ekstra guven
+                if (topGroup.Count() >= 2) winnerFinal = Math.Min(1.0, winnerFinal + 0.03);
 
-                return new PlateRecognitionResult(best.Plate, finalScore);
+                Candidate? best = new Candidate(winnerPlate, winnerFinal, winnerSource);
+
+                // Plaka tanindi -> kopyalanan vehicle frame dosyasinin adina plakayi ekle
+                if (vehicleFramePath != null)
+                    TryRenameVehicleFrame(vehicleFramePath, winnerPlate);
+
+                if (best == null) return null;
+                return new PlateRecognitionResult(best.Value.Plate, best.Value.Score);
             }
             catch (Exception ex)
             {
@@ -206,42 +229,35 @@ namespace Otopark.Client.Helpers
 
         // ===== ADAY BOLGELER =====
 
-        private IEnumerable<Mat> GetCandidateRegions(Mat src)
+        private List<Mat> DetectPlateRegions(Mat src)
         {
-            // 0a. ONNX (YOLOv8) - varsa SADECE onun bolgeleri (en hassas)
-            if (_onnxDetector.IsAvailable)
+            var regions = new List<Mat>();
+
+            // 1) ONNX YOLOv8 (en hassas)
+            if (_onnxDetector != null && _onnxDetector.IsAvailable)
             {
-                var onnxBoxes = _onnxDetector.Detect(src);
-                foreach (var box in onnxBoxes.Take(3))
-                {
-                    yield return ExpandAndCrop(src, box, 5);
-                }
-                if (onnxBoxes.Count > 0) yield break;
+                var boxes = _onnxDetector.Detect(src);
+                foreach (var box in boxes.Take(5))
+                    regions.Add(ExpandAndCrop(src, box, 8));
+                if (regions.Count > 0) return regions;
             }
 
-            // 0b. Haar cascade - varsa SADECE onun bolgeleri (tam goruntu KULLANILMAZ:
-            //     ekrandaki "GIRIS"/"CIKIS" tabela yazilarini plaka sanir)
-            if (_haarDetector.IsAvailable)
+            // 2) Haar cascade
+            if (_haarDetector != null && _haarDetector.IsAvailable)
             {
-                var haarBoxes = _haarDetector.Detect(src);
-                foreach (var box in haarBoxes.Take(5))
-                {
-                    yield return ExpandAndCrop(src, box, 5);
-                }
-                // Haar bulamadiysa fallback'e gec - ama tam goruntu OCR'i yapma
+                var boxes = _haarDetector.Detect(src);
+                foreach (var box in boxes.Take(5))
+                    regions.Add(ExpandAndCrop(src, box, 5));
+                if (regions.Count > 0) return regions;
             }
 
-            // Fallback: edge + renk tabanli kirpilmis bolgeler (tabela yazilari icermez)
-            int count = 0;
-            foreach (var r in DetectPlateRegionsByEdges(src).Take(5))
-            {
-                yield return r; count++;
-                if (count >= 5) break;
-            }
-            foreach (var r in DetectPlateRegionsByColor(src).Take(3))
-            {
-                yield return r;
-            }
+            // 3) Heuristik (edge + renk)
+            foreach (var r in DetectByEdges(src).Take(5))
+                regions.Add(r);
+            foreach (var r in DetectByColor(src).Take(3))
+                regions.Add(r);
+
+            return regions;
         }
 
         private static Mat ExpandAndCrop(Mat src, OcvRect box, int pad)
@@ -253,21 +269,17 @@ namespace Otopark.Client.Helpers
             return new Mat(src, new OcvRect(x, y, w, h)).Clone();
         }
 
-        private static List<Mat> DetectPlateRegionsByEdges(Mat src)
+        private static List<Mat> DetectByEdges(Mat src)
         {
             var regions = new List<Mat>();
             try
             {
                 using var gray = new Mat();
                 Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
-
                 using var blurred = new Mat();
                 Cv2.GaussianBlur(gray, blurred, new Size(5, 5), 0);
-
                 using var edges = new Mat();
                 Cv2.Canny(blurred, edges, 30, 200);
-
-                // Yatay karakterleri birlestir
                 using var dilated = new Mat();
                 using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(20, 5));
                 Cv2.Dilate(edges, dilated, kernel);
@@ -275,46 +287,33 @@ namespace Otopark.Client.Helpers
                 Cv2.FindContours(dilated, out var contours, out _,
                     RetrievalModes.External, ContourApproximationModes.ApproxSimple);
 
-                foreach (var contour in contours
-                    .OrderByDescending(c => Cv2.ContourArea(c))
-                    .Take(12))
+                foreach (var c in contours.OrderByDescending(c => Cv2.ContourArea(c)).Take(12))
                 {
-                    var r = Cv2.BoundingRect(contour);
+                    var r = Cv2.BoundingRect(c);
                     double aspect = (double)r.Width / Math.Max(1, r.Height);
-
-                    // Plaka oranlari (Turkce: ~4.7:1, biraz tolerans)
                     if (aspect < 1.6 || aspect > 9.0) continue;
                     if (r.Width < 50 || r.Height < 12) continue;
                     if (r.Width * r.Height < 1500) continue;
-
-                    var expanded = ExpandRect(r, src.Size(), 8);
-                    regions.Add(new Mat(src, expanded).Clone());
+                    regions.Add(new Mat(src, ExpandRect(r, src.Size(), 8)).Clone());
                 }
             }
             catch { }
             return regions;
         }
 
-        private static List<Mat> DetectPlateRegionsByColor(Mat src)
+        private static List<Mat> DetectByColor(Mat src)
         {
             var regions = new List<Mat>();
             try
             {
                 using var hsv = new Mat();
                 Cv2.CvtColor(src, hsv, ColorConversionCodes.BGR2HSV);
-
-                // Beyaz: dusuk doygunluk + yuksek aydinlik
                 using var whiteMask = new Mat();
                 Cv2.InRange(hsv, new Scalar(0, 0, 150), new Scalar(180, 60, 255), whiteMask);
-
-                // Sari (ticari plakalar)
                 using var yellowMask = new Mat();
                 Cv2.InRange(hsv, new Scalar(15, 80, 100), new Scalar(35, 255, 255), yellowMask);
-
                 using var combined = new Mat();
                 Cv2.BitwiseOr(whiteMask, yellowMask, combined);
-
-                // Yatay karakterleri birlestir
                 using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(15, 3));
                 using var closed = new Mat();
                 Cv2.MorphologyEx(combined, closed, MorphTypes.Close, kernel);
@@ -322,19 +321,14 @@ namespace Otopark.Client.Helpers
                 Cv2.FindContours(closed, out var contours, out _,
                     RetrievalModes.External, ContourApproximationModes.ApproxSimple);
 
-                foreach (var contour in contours
-                    .OrderByDescending(c => Cv2.ContourArea(c))
-                    .Take(10))
+                foreach (var c in contours.OrderByDescending(c => Cv2.ContourArea(c)).Take(10))
                 {
-                    var r = Cv2.BoundingRect(contour);
+                    var r = Cv2.BoundingRect(c);
                     double aspect = (double)r.Width / Math.Max(1, r.Height);
-
                     if (aspect < 1.8 || aspect > 8.0) continue;
                     if (r.Width < 60 || r.Height < 15) continue;
                     if (r.Width * r.Height < 2000) continue;
-
-                    var expanded = ExpandRect(r, src.Size(), 10);
-                    regions.Add(new Mat(src, expanded).Clone());
+                    regions.Add(new Mat(src, ExpandRect(r, src.Size(), 10)).Clone());
                 }
             }
             catch { }
@@ -350,104 +344,141 @@ namespace Otopark.Client.Helpers
                 Math.Min(imgSize.Height - Math.Max(0, r.Y - pad), r.Height + 2 * pad));
         }
 
-        // ===== PREPROCESSING =====
+        // ===== ONNX OCR VARYANTLARI =====
 
         /// <summary>
-        /// Bir bolge icin 3 hizli preprocessing varyanti.
-        /// (Coklu varyant cok yavasti - bolge basina ~18 OCR cagrisi yapiyordu)
+        /// ONNX OCR'a verilecek farkli on-isleme varyantlari:
+        /// 1) Orijinal (renkli)
+        /// 2) Kontrast artirilmis (CLAHE)
+        /// 3) Keskinlestirilmis (unsharp mask)
+        /// 4) 2x buyutulmus (kucuk plakalar icin)
+        /// 5) 2x buyutulmus + keskinlestirilmis
+        /// Birden fazla varyant -> daha guvenilir consensus + karakter segmentasyonu.
         /// </summary>
+        private static IEnumerable<Mat> OcrVariants(Mat region)
+        {
+            // 1) Orijinal (clone)
+            yield return region.Clone();
+
+            // 2) CLAHE kontrast
+            Mat? clahe = null;
+            try
+            {
+                using var gray = new Mat();
+                if (region.Channels() > 1)
+                    Cv2.CvtColor(region, gray, ColorConversionCodes.BGR2GRAY);
+                else
+                    region.CopyTo(gray);
+                using var claheOp = Cv2.CreateCLAHE(3.0, new Size(8, 8));
+                var enhanced = new Mat();
+                claheOp.Apply(gray, enhanced);
+                clahe = new Mat();
+                Cv2.CvtColor(enhanced, clahe, ColorConversionCodes.GRAY2BGR);
+                enhanced.Dispose();
+            }
+            catch { clahe?.Dispose(); clahe = null; }
+            if (clahe != null) yield return clahe;
+
+            // 3) Unsharp mask (keskinlestir)
+            Mat? sharp = null;
+            try
+            {
+                using var blurred = new Mat();
+                Cv2.GaussianBlur(region, blurred, new Size(0, 0), 2.0);
+                sharp = new Mat();
+                Cv2.AddWeighted(region, 1.6, blurred, -0.6, 0, sharp);
+            }
+            catch { sharp?.Dispose(); sharp = null; }
+            if (sharp != null) yield return sharp;
+
+            // 4) 2x upscale (kucuk plakalar icin karakter ayrimini artirir)
+            Mat? upscaled = null;
+            try
+            {
+                upscaled = new Mat();
+                Cv2.Resize(region, upscaled, new Size(region.Cols * 2, region.Rows * 2),
+                    interpolation: InterpolationFlags.Cubic);
+            }
+            catch { upscaled?.Dispose(); upscaled = null; }
+            if (upscaled != null) yield return upscaled;
+
+            // 5) 2x upscale + keskinlestir
+            Mat? upsharp = null;
+            try
+            {
+                using var bigRegion = new Mat();
+                Cv2.Resize(region, bigRegion, new Size(region.Cols * 2, region.Rows * 2),
+                    interpolation: InterpolationFlags.Cubic);
+                using var blurred2 = new Mat();
+                Cv2.GaussianBlur(bigRegion, blurred2, new Size(0, 0), 2.5);
+                upsharp = new Mat();
+                Cv2.AddWeighted(bigRegion, 1.8, blurred2, -0.8, 0, upsharp);
+            }
+            catch { upsharp?.Dispose(); upsharp = null; }
+            if (upsharp != null) yield return upsharp;
+        }
+
+        // ===== TESSERACT PREPROCESSING =====
+
         private static IEnumerable<Mat> PreprocessVariants(Mat region)
         {
             using var resized = ScaleForOcr(region);
-
             using var gray = new Mat();
             if (resized.Channels() > 1)
                 Cv2.CvtColor(resized, gray, ColorConversionCodes.BGR2GRAY);
             else
                 resized.CopyTo(gray);
 
-            // 1. CLAHE + Otsu (klasik beyaz zemin/siyah yazi)
-            yield return PreprocessOtsu(gray, false);
-
-            // 2. Adaptive threshold (degisken aydinlik)
-            yield return PreprocessAdaptive(gray, false);
-
-            // 3. Sharpen + Otsu (bulanik gorintuler)
+            yield return PreprocessOtsu(gray);
+            yield return PreprocessAdaptive(gray);
             yield return PreprocessSharpen(gray);
         }
 
         private static Mat ScaleForOcr(Mat src)
         {
             var dst = new Mat();
-            // Tesseract optimum yukseklik: 100-200px
-            double scale = Math.Max(1.0, 150.0 / Math.Max(1, src.Rows));
+            // Tesseract optimum karakter yuksekligi 32-48px. Plaka tipik yuksekligi
+            // detection sonrasi 30-80px arasindaysa, satir yuksekligi 200px hedefleyelim.
+            double scale = Math.Max(1.0, 200.0 / Math.Max(1, src.Rows));
             if (scale > 1.0)
-            {
                 Cv2.Resize(src, dst, new Size((int)(src.Cols * scale), (int)(src.Rows * scale)),
-                    interpolation: InterpolationFlags.Lanczos4);
-            }
+                    interpolation: InterpolationFlags.Cubic);
             else
                 src.CopyTo(dst);
             return dst;
         }
 
-        private static Mat PreprocessOtsu(Mat gray, bool invert)
+        private static Mat PreprocessOtsu(Mat gray)
         {
             using var clahe = Cv2.CreateCLAHE(3.0, new Size(8, 8));
             using var enhanced = new Mat();
             clahe.Apply(gray, enhanced);
-            clahe.Dispose();
-
             using var denoised = new Mat();
             Cv2.FastNlMeansDenoising(enhanced, denoised, h: 10);
-
             var result = new Mat();
-            var threshType = ThresholdTypes.Otsu | (invert ? ThresholdTypes.BinaryInv : ThresholdTypes.Binary);
-            Cv2.Threshold(denoised, result, 0, 255, threshType);
+            Cv2.Threshold(denoised, result, 0, 255, ThresholdTypes.Otsu | ThresholdTypes.Binary);
             return result;
         }
 
-        private static Mat PreprocessAdaptive(Mat gray, bool invert)
+        private static Mat PreprocessAdaptive(Mat gray)
         {
             using var blurred = new Mat();
             Cv2.GaussianBlur(gray, blurred, new Size(3, 3), 0);
-
             var result = new Mat();
             Cv2.AdaptiveThreshold(blurred, result, 255,
-                AdaptiveThresholdTypes.GaussianC,
-                invert ? ThresholdTypes.BinaryInv : ThresholdTypes.Binary,
-                blockSize: 31, c: 7);
+                AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, 31, 7);
             return result;
         }
 
         private static Mat PreprocessSharpen(Mat gray)
         {
-            // Unsharp mask
             using var blurred = new Mat();
             Cv2.GaussianBlur(gray, blurred, new Size(0, 0), 3);
             using var sharp = new Mat();
             Cv2.AddWeighted(gray, 1.5, blurred, -0.5, 0, sharp);
-
             using var clahe = Cv2.CreateCLAHE(3.0, new Size(8, 8));
             using var enhanced = new Mat();
             clahe.Apply(sharp, enhanced);
-            clahe.Dispose();
-
-            var result = new Mat();
-            Cv2.Threshold(enhanced, result, 0, 255, ThresholdTypes.Otsu | ThresholdTypes.Binary);
-            return result;
-        }
-
-        private static Mat PreprocessBilateral(Mat gray)
-        {
-            using var bilateral = new Mat();
-            Cv2.BilateralFilter(gray, bilateral, 9, 75, 75);
-
-            using var clahe = Cv2.CreateCLAHE(3.0, new Size(8, 8));
-            using var enhanced = new Mat();
-            clahe.Apply(bilateral, enhanced);
-            clahe.Dispose();
-
             var result = new Mat();
             Cv2.Threshold(enhanced, result, 0, 255, ThresholdTypes.Otsu | ThresholdTypes.Binary);
             return result;
@@ -455,7 +486,7 @@ namespace Otopark.Client.Helpers
 
         // ===== OCR =====
 
-        private Candidate? TryOcr(Mat image, PageSegMode psm)
+        private Candidate? TryTesseract(Mat image, PageSegMode psm)
         {
             if (_engine == null || image.Empty()) return null;
 
@@ -471,28 +502,33 @@ namespace Otopark.Client.Helpers
                     using var page = _engine.Process(pix, psm);
 
                     var raw = page.GetText()?.Trim() ?? "";
-                    var plate = PlateRules.Normalize(raw);
+                    var plate = NormalizePlate(raw);
+                    double score = page.GetMeanConfidence();
 
                     if (plate.Length < 5 || plate.Length > 10) return null;
-
-                    // Tesseract ham guven skoru (0-1). Cok dusuk skorlar genelde
-                    // halusinasyon (tabela yazisi, gurultu) - reddet.
-                    double score = page.GetMeanConfidence();
-                    if (score < 0.30) return null;
-
-                    return new Candidate(plate, score);
+                    // Threshold dusuruldu (0.20 -> 0.05), format library yanlis pozitifleri filtreler
+                    if (score < 0.05) return null;
+                    return new Candidate(plate, score, "tesseract");
                 }
-                catch { return null; }
+                catch (Exception ex) { AppLog($"Tesseract hata: {ex.Message}"); return null; }
             }
         }
 
-        // ===== FORMAT-AWARE DUZELTME =====
+        // ===== HELPERS =====
+
+        private static string NormalizePlate(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "";
+            var s = raw.Trim().ToUpperInvariant();
+            s = new string(s.Where(char.IsLetterOrDigit).ToArray());
+            s = s.Replace('İ', 'I').Replace('Ö', 'O').Replace('Ü', 'U')
+                 .Replace('Ş', 'S').Replace('Ç', 'C').Replace('Ğ', 'G');
+            return s;
+        }
 
         /// <summary>
-        /// Turk plaka formatina (CC[A-Z]{1,3}[0-9]{2,4}) gore karakter duzeltmeleri yapar.
-        /// Pozisyon 0,1 -> rakam olmali (sehir kodu)
-        /// Pozisyon 2-4 -> harf olmali (1-3 karakter)
-        /// Sonraki -> rakam olmali (2-4 karakter)
+        /// TR plaka formatina gore karakter karisikligi duzeltir (1-I, 0-O vb).
+        /// Pattern: 99[A-Z]{1,3}[0-9]{2,4}
         /// </summary>
         private static string CorrectPlateFormat(string plate)
         {
@@ -502,54 +538,46 @@ namespace Otopark.Client.Helpers
             var chars = plate.ToCharArray();
             int n = chars.Length;
 
-            // Pozisyon 0,1: rakam olmali
+            // Pos 0,1: rakam
             for (int i = 0; i < 2; i++)
-            {
                 if (char.IsLetter(chars[i]) && LetterToDigit.TryGetValue(chars[i], out var d))
                     chars[i] = d;
-            }
 
-            // Sondaki rakam blogunun uzunlugunu tahmin et (2-4 karakter)
-            // Geriye dogru: rakam (veya rakama benzer harf) bulundugu surece say
-            int trailingDigitCount = 0;
-            int idx = n - 1;
-            while (idx >= 2 && trailingDigitCount < 4)
+            // Sondaki rakam blogunu bul
+            int trailingDigits = 0, idx = n - 1;
+            while (idx >= 2 && trailingDigits < 4)
             {
                 char c = chars[idx];
-                bool isDigitOrLikeDigit = char.IsDigit(c) || LetterToDigit.ContainsKey(c);
-                if (!isDigitOrLikeDigit) break;
-                trailingDigitCount++;
-                idx--;
+                bool isDigitOrLike = char.IsDigit(c) || LetterToDigit.ContainsKey(c);
+                if (!isDigitOrLike) break;
+                trailingDigits++; idx--;
             }
+            if (trailingDigits < 2) return plate;
+            if (trailingDigits > 4) trailingDigits = 4;
 
-            // En az 2 rakam olmali
-            if (trailingDigitCount < 2) return plate;
-            // En fazla 4 al
-            if (trailingDigitCount > 4) trailingDigitCount = 4;
-
-            int letterEndExclusive = n - trailingDigitCount;
-            // Harf bolumu 1-3 karakter olmali (pozisyon 2..letterEnd)
-            int letterCount = letterEndExclusive - 2;
+            int letterEnd = n - trailingDigits;
+            int letterCount = letterEnd - 2;
             if (letterCount < 1 || letterCount > 3) return plate;
 
-            // Pozisyon 2..letterEnd: harf olmali
-            for (int i = 2; i < letterEndExclusive; i++)
+            // Orta blok harf olmali
+            for (int i = 2; i < letterEnd; i++)
             {
-                if (char.IsDigit(chars[i]) && DigitToLetter.TryGetValue(chars[i], out var l))
-                    chars[i] = l;
+                if (char.IsDigit(chars[i]))
+                {
+                    chars[i] = chars[i] switch
+                    {
+                        '0' => 'O', '1' => 'I', '2' => 'Z', '5' => 'S', '6' => 'G', '8' => 'B',
+                        _ => chars[i]
+                    };
+                }
             }
-
-            // Pozisyon letterEnd..n: rakam olmali
-            for (int i = letterEndExclusive; i < n; i++)
-            {
+            // Son blok rakam olmali
+            for (int i = letterEnd; i < n; i++)
                 if (char.IsLetter(chars[i]) && LetterToDigit.TryGetValue(chars[i], out var d))
                     chars[i] = d;
-            }
 
             return new string(chars);
         }
-
-        // ===== YARDIMCI =====
 
         private static void AppLog(string msg)
         {
@@ -561,21 +589,66 @@ namespace Otopark.Client.Helpers
             catch { }
         }
 
+        // ===== ARAC FRAME'LERI KAYIT (gelistirme/debug icin) =====
+
+        /// <summary>
+        /// Detection bulundugunda orijinal kamera frame'ini ayri klasore kopyalar:
+        ///   C:\Otopark\VehicleFrames\YYYY-MM-DD\HHmmss_fff__originalName.jpg
+        /// Plaka tanindiktan sonra TryRenameVehicleFrame ile filename guncellenir.
+        /// </summary>
+        private static string? TrySaveVehicleFrame(string sourcePath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath)) return null;
+                var dir = Path.Combine(@"C:\Otopark\VehicleFrames", DateTime.Now.ToString("yyyy-MM-dd"));
+                Directory.CreateDirectory(dir);
+                var srcName = Path.GetFileNameWithoutExtension(sourcePath);
+                var destPath = Path.Combine(dir, $"{DateTime.Now:HHmmss_fff}__{srcName}.jpg");
+                File.Copy(sourcePath, destPath, overwrite: false);
+                return destPath;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Plaka tanindiktan sonra kayitli vehicle frame dosyasinin adini plakayla guncel.ler
+        /// Ornek: 100548_344__snap_xxx.jpg -> 100548_344__snap_xxx__81DH999.jpg
+        /// </summary>
+        private static void TryRenameVehicleFrame(string framePath, string plate)
+        {
+            try
+            {
+                if (!File.Exists(framePath) || string.IsNullOrWhiteSpace(plate)) return;
+                var safePlate = string.Concat(plate.Where(char.IsLetterOrDigit));
+                if (safePlate.Length == 0) return;
+
+                var dir = Path.GetDirectoryName(framePath)!;
+                var nameNoExt = Path.GetFileNameWithoutExtension(framePath);
+                var ext = Path.GetExtension(framePath);
+                var newPath = Path.Combine(dir, $"{nameNoExt}__{safePlate}{ext}");
+                if (!File.Exists(newPath))
+                    File.Move(framePath, newPath);
+            }
+            catch { }
+        }
+
         public void Dispose()
         {
             if (!_disposed)
             {
                 _engine?.Dispose();
                 _onnxDetector?.Dispose();
+                _onnxOcr?.Dispose();
                 _haarDetector?.Dispose();
                 _disposed = true;
             }
         }
 
-        private readonly record struct Candidate(string Plate, double Score);
+        private readonly record struct Candidate(string Plate, double Score, string Source);
     }
 
-    internal sealed class PlateRecognitionResult
+    public sealed class PlateRecognitionResult
     {
         public string Plate { get; }
         public double Score { get; }
