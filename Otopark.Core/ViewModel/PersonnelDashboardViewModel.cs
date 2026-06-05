@@ -17,6 +17,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     private readonly VehicleParkApiService _vehicleApi;
     private readonly VehicleDefinitionApiService _vehicleDefApi;
     private readonly ZoneApiService _zoneApi;
+
+    // Yikama penceresi gibi yardimci ekranlarin API'ye erismesi icin.
+    public VehicleParkApiService ApiService => _vehicleApi;
     private readonly VehicleParkQueryService _parkQuery;
     private readonly LookupApiService _lookupApi;
 

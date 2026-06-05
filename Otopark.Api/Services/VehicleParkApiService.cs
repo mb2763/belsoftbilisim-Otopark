@@ -234,6 +234,49 @@ public partial class VehicleParkApiService
             return new SubscriptionCheckResponse { IsSubscriber = false };
         }
     }
+
+    // ===== YIKAMA (Wash) =====
+
+    /// <summary>Kapali otoparktaki son N icerideki arac (yikama listesi).</summary>
+    public async Task<List<WashEntryDto>> GetWashRecentEntriesAsync(long companyId, int take = 15)
+    {
+        try
+        {
+            var url = $"Wash/GetRecentEntries?companyId={companyId}&take={take}";
+            using var response = await _http.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return new();
+            var json = await response.Content.ReadAsStringAsync();
+            var env = JsonSerializer.Deserialize<WashEntriesEnvelope>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return env?.Data ?? new();
+        }
+        catch { return new(); }
+    }
+
+    /// <summary>Yikama fisi bas. Basariliysa Success=true ve tutar/sure bilgileri doner.</summary>
+    public async Task<WashReceiptResult> PrintWashReceiptAsync(long companyId, long currentUserId, long vehicleEntryId, int freeMinutes)
+    {
+        try
+        {
+            var body = new
+            {
+                CompanyId = companyId,
+                CurrentUserId = currentUserId,
+                VehicleEntryId = vehicleEntryId,
+                FreeMinutes = freeMinutes
+            };
+            using var response = await _http.PostAsJsonAsync("Wash/PrintReceipt", body);
+            var json = await response.Content.ReadAsStringAsync();
+            var res = JsonSerializer.Deserialize<WashReceiptResult>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (res == null) return new WashReceiptResult { Code = 0, Message = "Bos yanit" };
+            return res;
+        }
+        catch (Exception ex)
+        {
+            return new WashReceiptResult { Code = 0, Message = ex.Message };
+        }
+    }
 }
 
 public class SubscriptionCheckResponse
@@ -241,6 +284,38 @@ public class SubscriptionCheckResponse
     public bool IsSubscriber { get; set; }
     public string? SubscriptionName { get; set; }
     public DateTime? FinishDate { get; set; }
+}
+
+public class WashEntriesEnvelope
+{
+    public int Code { get; set; }
+    public string? Message { get; set; }
+    public List<WashEntryDto>? Data { get; set; }
+}
+
+public class WashEntryDto
+{
+    public long EntryId { get; set; }
+    public string? Plate { get; set; }
+    public DateTime EntryTime { get; set; }
+    public int MinutesIn { get; set; }
+    public long ZoneId { get; set; }
+    public bool AlreadyWashed { get; set; }
+}
+
+public class WashReceiptResult
+{
+    public int Code { get; set; }                 // 1=basarili, 0=hata
+    public string? Message { get; set; }
+    public long ReceiptId { get; set; }
+    public string? Plate { get; set; }
+    public DateTime? EntryTime { get; set; }
+    public DateTime? ReceiptTime { get; set; }
+    public int MinutesIn { get; set; }
+    public int FreeMinutes { get; set; }
+    public decimal ChargedAmount { get; set; }
+    public bool IsFree { get; set; }
+    public bool Success => Code == 1;
 }
 
 public class DeleteEntryResponse

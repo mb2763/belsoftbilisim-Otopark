@@ -597,6 +597,27 @@ namespace Otopark.Client.Views
             await ManualCaptureAsync(ExitCaptureFolder, ExitShotsFolder, false);
         }
 
+        // Yikama ekranini ayri pencerede ac (VehicleParkApiService VM'den alinir).
+        private void Wash_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (DataContext is not Otopark.Core.PersonnelDashboardViewModel vm)
+                {
+                    MessageBox.Show("Oturum bilgisi bulunamadı.", "Yıkama",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                var win = new WashWindow(vm.ApiService) { Owner = Window.GetWindow(this) };
+                win.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Yıkama ekranı açılamadı: " + ex.Message, "Hata",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private async Task ManualCaptureAsync(string captureFolder, string saveDir, bool isEntry)
         {
             try
