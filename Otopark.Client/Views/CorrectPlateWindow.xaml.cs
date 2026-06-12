@@ -10,13 +10,29 @@ public partial class CorrectPlateWindow : Window
 {
     public string NewPlate { get; private set; } = "";
 
-    public CorrectPlateWindow(string oldPlate)
+    public CorrectPlateWindow(string oldPlate, string? imagePath = null)
     {
         InitializeComponent();
         TxtOldPlate.Text = oldPlate ?? "";
         TxtNewPlate.Text = oldPlate ?? "";
         TxtNewPlate.Focus();
         TxtNewPlate.SelectAll();
+
+        // Plakanin gorundugu arac fotografi (varsa) gosterilir.
+        if (!string.IsNullOrWhiteSpace(imagePath) && System.IO.File.Exists(imagePath))
+        {
+            try
+            {
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.UriSource = new System.Uri(imagePath, System.UriKind.Absolute);
+                bmp.EndInit();
+                ImgPlate.Source = bmp;
+                PhotoPanel.Visibility = Visibility.Visible;
+            }
+            catch { /* gorsel yuklenemezse panel gizli kalir */ }
+        }
     }
 
     private void TxtNewPlate_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)

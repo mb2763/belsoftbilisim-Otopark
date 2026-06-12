@@ -13,6 +13,14 @@
             <TextBlock Text="Plaka Duzelt" FontSize="16" FontWeight="Bold"
                        Foreground="#1B2B4A" HorizontalAlignment="Center" Margin="0,0,0,14"/>
 
+            <!-- Arac fotografi (plakanin gorundugu giris gorseli) -->
+            <StackPanel x:Name="PhotoPanel" Visibility="Collapsed" Margin="0,0,0,12">
+                <TextBlock Text="Arac Fotografi" Foreground="#6B7A99" FontSize="12" Margin="0,0,0,4"/>
+                <Border CornerRadius="8" BorderBrush="#DDE3EE" BorderThickness="1" ClipToBounds="True">
+                    <Image x:Name="ImgPlate" Stretch="Uniform" MaxHeight="220"/>
+                </Border>
+            </StackPanel>
+
             <TextBlock Text="Eski Plaka" Foreground="#6B7A99" FontSize="12" Margin="0,0,0,4"/>
             <TextBox x:Name="TxtOldPlate" Height="34" Padding="8,0"
                      VerticalContentAlignment="Center" IsReadOnly="True"

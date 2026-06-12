@@ -37,4 +37,19 @@ public sealed class ZoneApiService
         var data = await response.Content.ReadFromJsonAsync<List<ZoneDto>>();
         return data ?? new List<ZoneDto>();
     }
+
+    /// <summary>
+    /// Kullanicinin (operatorun) erisim YETKISI olan bolgeleri doner.
+    /// Bos liste = yetki atanmamis (cagiran taraf kisitlama uygulamaz).
+    /// </summary>
+    public async Task<List<ZoneDto>> GetAuthorizedZonesAsync(long userId, long companyId, long zoneClassId)
+    {
+        var url = $"Zone/GetAuthorizedZonesByUser?userId={userId}&companyId={companyId}&zoneClassId={zoneClassId}";
+
+        using var response = await _http.PostAsync(url, null);
+        response.EnsureSuccessStatusCode();
+
+        var data = await response.Content.ReadFromJsonAsync<List<ZoneDto>>();
+        return data ?? new List<ZoneDto>();
+    }
 }

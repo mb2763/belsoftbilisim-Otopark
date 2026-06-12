@@ -130,6 +130,23 @@ public partial class LoginViewModel : ObservableObject
                 return;
             }
 
+            // BOLGE BAZLI YETKI: operator yalnizca YETKILI oldugu otoparka girebilir.
+            // Yetki atanmamissa (bos liste) kisitlama uygulanmaz (kademeli gecis).
+            if (!isAdmin && SelectedZone != null)
+            {
+                try
+                {
+                    var authZones = await zoneApiForDash.GetAuthorizedZonesAsync(
+                        result.Result.Id, 2, SelectedZone.ZoneClassId);
+                    if (authZones.Count > 0 && !authZones.Any(z => z.Id == SelectedZone.Id))
+                    {
+                        ErrorMessage = "Bu otoparka erisim yetkiniz yok. Lutfen yetkili oldugunuz bir bolge seciniz.";
+                        return;
+                    }
+                }
+                catch { /* yetki servisi hatasi girisi engellemesin */ }
+            }
+
             UserSession.UserId = result.Result.Id;
             UserSession.CompanyId = 2;
             UserSession.UserName = result.Result.UserName;

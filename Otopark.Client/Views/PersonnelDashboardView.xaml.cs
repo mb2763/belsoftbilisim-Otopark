@@ -20,6 +20,10 @@ namespace Otopark.Client.Views
         private FileSystemWatcher? _exitWatcher;
 
         private readonly CancellationTokenSource _cts = new();
+        // Kamera yakalama icin AYRI token: "Kameralari Durdur" butonu yalnizca bunu iptal eder
+        // (giris/cikis islemeyi durdurur); ana _cts'e dokunulmaz.
+        private CancellationTokenSource _cameraCts = new();
+        private bool _camerasPaused = false;
         private readonly SemaphoreSlim _entryGate = new(1, 1);
         // FIX 5 — Snapshot throttling: ayni kameradan saniyede maksimum 2 snapshot
         // isle (500ms minimum aralik). Kamera dakikada 100+ snapshot atinca CPU/Cloud
@@ -197,7 +201,7 @@ namespace Otopark.Client.Views
                         string? newPlate = null;
                         await Dispatcher.InvokeAsync(() =>
                         {
-                            var popup = new CorrectPlateWindow(row.Plate);
+                            var popup = new CorrectPlateWindow(row.Plate, row.EntryPlateImagePath);
                             popup.Owner = Window.GetWindow(this);
                             if (popup.ShowDialog() == true)
                                 newPlate = popup.NewPlate;
@@ -217,7 +221,7 @@ namespace Otopark.Client.Views
             Directory.CreateDirectory(EntryShotsFolder);
             Directory.CreateDirectory(ExitShotsFolder);
 
-            Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cts.Token);
+            Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
             StartUiTimer();
             StartWatchers();
         }
@@ -230,9 +234,38 @@ namespace Otopark.Client.Views
                 _detectTimer.Stop();
                 _entryWatcher?.Dispose();
                 _exitWatcher?.Dispose();
+                _cameraCts.Cancel();
                 _cts.Cancel();
             }
             catch { }
+        }
+
+        // ===== KAMERA AC/KAPA (giris-cikis engelle) =====
+
+        private void ToggleCameras_Click(object sender, RoutedEventArgs e)
+        {
+            var vm = DataContext as PersonnelDashboardViewModel;
+            if (_camerasPaused)
+            {
+                // Yeniden baslat
+                _cameraCts = new CancellationTokenSource();
+                Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
+                _camerasPaused = false;
+                BtnToggleCameras.Content = "Kameralar: ACIK";
+                BtnToggleCameras.Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#5ACF90"));
+                vm?.ShowBarrierToast(true, "Kameralar baslatildi. Giris/cikis acik.");
+            }
+            else
+            {
+                // Durdur: kamera yakalama iptal + OCR/otomatik isleme duraklat
+                _cameraCts.Cancel();
+                _camerasPaused = true;
+                BtnToggleCameras.Content = "Kameralar: KAPALI";
+                BtnToggleCameras.Background = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#FF5A5A"));
+                vm?.ShowBarrierToast(false, "Kameralar durduruldu. Giris/cikis engellendi.");
+            }
         }
 
         // ===== TIMER =====
@@ -251,6 +284,7 @@ namespace Otopark.Client.Views
             _detectTimer.Interval = TimeSpan.FromMilliseconds(1500);
             _detectTimer.Tick += async (_, __) =>
             {
+                if (_camerasPaused) return;   // Kameralar durdurulduysa OCR/otomatik giris-cikis isleme yok
                 if (_tickBusy) return;
                 _tickBusy = true;
                 try

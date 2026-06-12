@@ -87,6 +87,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     [ObservableProperty] private bool isStatusUnapproved;             // Iceridekiler (cikis yapmamis - icerideki araclar)
     [ObservableProperty] private bool isStatusCancelled;              // Iptaller
     [ObservableProperty] private bool isStatusAll;                    // Hepsi (iptal dahil)
+    [ObservableProperty] private bool isStatusBlacklist;             // Kara liste (odenmemis borcu olan araclar)
 
     partial void OnIsStatusAllInOutChanged(bool value) { if (value) ApplyFiltersInternal(); }
     partial void OnIsStatusApprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
@@ -94,6 +95,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     partial void OnIsStatusUnapprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
     partial void OnIsStatusCancelledChanged(bool value) { if (value) ApplyFiltersInternal(); }
     partial void OnIsStatusAllChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    partial void OnIsStatusBlacklistChanged(bool value) { if (value) ApplyFiltersInternal(); }
 
     // Filtre: Zaman
     [ObservableProperty] private bool isTimeShift = true;
@@ -246,6 +248,8 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     OldDebt = (decimal)d.Balance,
                     CurrentDebt = (decimal)(d.CalculatedFee ?? 0),
                     TotalDebt = (decimal)(d.CurrentDebitAmount ?? 0),
+                    // Cikis yapilmissa cikis tutari hasilata sayilir; icerideki araclarda 0.
+                    ExitFee = d.ExitTimestamp.HasValue ? (decimal)(d.CalculatedFee ?? 0) : 0m,
                 };
 
                 // Lokal cache'te plaka+timestamp ile esles
@@ -286,7 +290,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     {
         CurrentVehicleCount = _allVehicles.Count(v => v.ExitDateTime == null);
         EmptyParkCount = Math.Max(0, TotalCapacity - CurrentVehicleCount);
-        TotalRevenue = _allVehicles.Sum(v => v.CurrentDebt);
+        // Hasilat: yalnizca CIKIS yapan araclarin (bu bolge) cikis tutarlari sayilir.
+        // Iceride bekleyen veya iptal edilen araclar hasilata yansimaz.
+        TotalRevenue = _allVehicles
+            .Where(v => v.ExitDateTime != null && v.ParkType != "Iptal")
+            .Sum(v => v.ExitFee);
         SubscriptionRevenue = 0; // TODO: Abonelik hasilati ayri hesaplanacak
     }
 
@@ -441,8 +449,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 // hata olursa default (N) kalir
             }
 
-            // Giris basarili - tarife ucretini cek ve aracı borclandir
-            if (entry?.Id > 0)
+            // Giris basarili - tarife ucretini cek ve aracı borclandir.
+            // ABONE araclardan giriste ucret ALINMAZ (abonelik tutari 0) -> yalnizca abone DEGILSE borclandir.
+            if (entry?.Id > 0 && !row.IsSubscriber)
             {
                 try
                 {
@@ -508,6 +517,26 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         // Gorsel yok; pending photo bosaltilir
         _entryPendingPhotoBase64 = "";
         await DoApproveEntryAsync();
+
+        MissedPlateInput = "";
+    }
+
+    // ===== KACIRMALARDAN DISARI AL =====
+    // "Iceri Al" karsisindaki buton: kacirilan plakanin CIKISINI yapar.
+    [RelayCommand]
+    private async Task ImportMissedExitAsync()
+    {
+        var plate = (MissedPlateInput ?? "").Trim().ToUpperInvariant();
+        plate = new string(plate.Where(char.IsLetterOrDigit).ToArray());
+
+        if (string.IsNullOrWhiteSpace(plate) || plate.Length < 5)
+        {
+            ShowToast("Gecerli bir plaka giriniz.", false);
+            return;
+        }
+
+        ExitDetectedPlate = plate;
+        await DoApproveExitAsync();
 
         MissedPlateInput = "";
     }
@@ -830,6 +859,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 existingRow.ExitDateTime = DateTime.Now;
                 existingRow.ExitPlateImagePath = GetFirstSnapshotPath(isEntry: false);
                 existingRow.ParkType = "Cikis";
+                existingRow.ExitFee = existingRow.CurrentDebt;   // cikis tutarini hasilata yansit (sifirlanmadan once yakala)
                 existingRow.CurrentDebt = 0;
                 existingRow.TotalDebt = existingRow.OldDebt;
             }
@@ -1124,10 +1154,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             filtered = filtered.Where(v => v.ExitDateTime == null && v.ParkType != "Iptal"); // Iceridekiler (alias)
         else if (IsStatusCancelled)
             filtered = filtered.Where(v => v.ParkType == "Iptal");
+        else if (IsStatusBlacklist)
+            filtered = filtered.Where(v => v.IsBlacklisted && v.ParkType != "Iptal"); // Kara liste: odenmemis borcu olanlar
         // IsStatusAll -> filtre yok (iptal dahil hepsi)
 
         // Mesai filtresi (API bugunun verisini dondurur, mesai saatine gore daralt)
-        if (IsTimeShift)
+        // Kara liste modunda mesai filtresi uygulanmaz (tum borclular gorunsun).
+        if (IsTimeShift && !IsStatusBlacklist)
         {
             var now = DateTime.Now;
             var shiftStart = now.Date.AddHours(now.Hour >= 8 ? 8 : -16);
@@ -1180,9 +1213,12 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         [ObservableProperty] private string parkType = "";
         [ObservableProperty] private DateTime entryDateTime = DateTime.Now;
         [ObservableProperty] private DateTime? exitDateTime;
-        [ObservableProperty] private decimal oldDebt;
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(IsBlacklisted))]
+        private decimal oldDebt;
         [ObservableProperty] private decimal currentDebt;
         [ObservableProperty] private decimal totalDebt;
+        [ObservableProperty] private decimal exitFee;   // Cikis tutari (hasilat icin) - yalnizca cikis yapan araclarda dolu
         [ObservableProperty] private string entryPlateImagePath = "";
         [ObservableProperty] private string exitPlateImagePath = "";
 
@@ -1190,6 +1226,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         [ObservableProperty] private string entryType = "N";          // "A" veya "N"
         [ObservableProperty] private bool isSubscriber;               // true => A
         [ObservableProperty] private string subscriptionName = "";    // sadece abone ise dolu
+
+        // Kara liste: gecmis (odenmemis) borcu olan arac. Tabloda satir arka plani siyah olur.
+        public bool IsBlacklisted => OldDebt > 0m;
 
         // Anlik sure hesaplama
         public void UpdateDuration()
