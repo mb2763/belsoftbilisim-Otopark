@@ -221,9 +221,22 @@ namespace Otopark.Client.Views
             Directory.CreateDirectory(EntryShotsFolder);
             Directory.CreateDirectory(ExitShotsFolder);
 
-            Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
+            // Kamera IP'lerini ONCE DB'den (API) yukle; yoksa appsettings'e dusulur (CameraConfigService).
+            _ = StartCamerasAsync();
             StartUiTimer();
             StartWatchers();
+        }
+
+        private async Task StartCamerasAsync()
+        {
+            try
+            {
+                long zoneId = 0;
+                try { zoneId = Services.AppConfigHelper.BolgeId; } catch { }
+                await Services.CameraConfigService.LoadAsync(Otopark.Core.Session.UserSession.CompanyId, zoneId);
+            }
+            catch { }
+            Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
         }
 
         private void Stop()

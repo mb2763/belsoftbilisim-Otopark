@@ -16,8 +16,13 @@ namespace Otopark.Client.Services;
 /// </summary>
 public static class CameraSnapshotService
 {
-    private static string EntryUrl => AppConfig.Configuration["CameraSnapshot:EntrySnapshotUrl"] ?? "";
-    private static string ExitUrl => AppConfig.Configuration["CameraSnapshot:ExitSnapshotUrl"] ?? "";
+    // Once web'den DB'ye tanimlanan kamera (CameraConfigService) varsa onu kullan; yoksa appsettings (fallback).
+    private static string EntryUrl => !string.IsNullOrWhiteSpace(CameraConfigService.EntryUrl)
+        ? CameraConfigService.EntryUrl
+        : (AppConfig.Configuration["CameraSnapshot:EntrySnapshotUrl"] ?? "");
+    private static string ExitUrl => !string.IsNullOrWhiteSpace(CameraConfigService.ExitUrl)
+        ? CameraConfigService.ExitUrl
+        : (AppConfig.Configuration["CameraSnapshot:ExitSnapshotUrl"] ?? "");
     private static int SaveIntervalMs => int.TryParse(AppConfig.Configuration["CameraSnapshot:IntervalMs"], out var v) ? v : 500;
 
     // Klasorde tutulacak maksimum dosya sayisi.

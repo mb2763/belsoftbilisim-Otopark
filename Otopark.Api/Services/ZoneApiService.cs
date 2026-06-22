@@ -12,6 +12,15 @@ public sealed class ZoneDto
     public int Capacity { get; set; }
 }
 
+public sealed class ZoneCameraDto
+{
+    public long Id { get; set; }
+    public long ZoneId { get; set; }
+    public int CameraType { get; set; }   // 1 = Giris, 2 = Cikis
+    public string IpAddress { get; set; } = "";
+    public string CameraName { get; set; } = "";
+}
+
 public sealed class ZoneApiService
 {
     private readonly HttpClient _http;
@@ -51,5 +60,20 @@ public sealed class ZoneApiService
 
         var data = await response.Content.ReadFromJsonAsync<List<ZoneDto>>();
         return data ?? new List<ZoneDto>();
+    }
+
+    /// <summary>
+    /// Bolge (otopark) kamera IP tanimlari (web'den DB'ye girilen). zoneId=0 -> tum bolgeler.
+    /// CameraType: 1=Giris, 2=Cikis. Bos liste -> cagiran taraf appsettings'e duser.
+    /// </summary>
+    public async Task<List<ZoneCameraDto>> GetZoneCamerasAsync(long companyId, long zoneId)
+    {
+        var url = $"Zone/GetZoneCameras?companyId={companyId}&zoneId={zoneId}";
+
+        using var response = await _http.PostAsync(url, null);
+        response.EnsureSuccessStatusCode();
+
+        var data = await response.Content.ReadFromJsonAsync<List<ZoneCameraDto>>();
+        return data ?? new List<ZoneCameraDto>();
     }
 }
