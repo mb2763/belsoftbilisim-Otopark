@@ -335,6 +335,32 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             return;
         }
 
+        // ===== KAPASITE KONTROLU =====
+        // Otopark DOLU ise (icerideki arac sayisi >= kapasite) yalnizca ABONE araclar girebilir.
+        // Ucretli (abone olmayan) araclar icin bariyer ACILMAZ, giris engellenir.
+        // Kapasite tanimsiz (0) ise kontrol uygulanmaz (sinirsiz).
+        if (TotalCapacity > 0 && CurrentVehicleCount >= TotalCapacity)
+        {
+            bool isSubscriber = false;
+            try
+            {
+                var capSubResp = await _vehicleApi.CheckSubscriptionAsync(plate, UserSession.CompanyId);
+                isSubscriber = capSubResp != null && capSubResp.IsSubscriber;
+            }
+            catch
+            {
+                // abonelik sorgulanamadi -> dolu otoparkta riski almamak icin girisi engelle
+                isSubscriber = false;
+            }
+
+            if (!isSubscriber)
+            {
+                ShowToast($"Otopark dolu ({CurrentVehicleCount}/{TotalCapacity}), sadece abonelere acik. {plate} girisi yapilamaz.", false);
+                return;
+            }
+            // Abone arac -> normal akisa devam, giris + bariyer acilir.
+        }
+
         try
         {
             // 1. Once plaka kayitli mi sorgula

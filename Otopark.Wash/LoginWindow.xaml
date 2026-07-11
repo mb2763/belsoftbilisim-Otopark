@@ -1,0 +1,139 @@
+<Window x:Class="Otopark.Wash.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Kapalı Otopark - Yıkama Girişi"
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
+        Background="#F5F7FB">
+    <Grid Background="#F5F7FB">
+
+        <!-- Ortadaki kart -->
+        <Border Width="420"
+                Padding="28"
+                CornerRadius="16"
+                Background="White"
+                BorderBrush="#E6EAF2"
+                BorderThickness="1"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+
+            <StackPanel>
+
+                <!-- Logolar -->
+                <Grid Margin="0,0,0,16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Image Grid.Column="0"
+                           Height="64"
+                           HorizontalAlignment="Left"
+                           Source="pack://application:,,,/Assets/logo_left.png"
+                           Stretch="Uniform"/>
+
+                    <Image Grid.Column="1"
+                           Height="64"
+                           HorizontalAlignment="Right"
+                           Source="pack://application:,,,/Assets/kurum_logo.png"
+                           Stretch="Uniform"/>
+                </Grid>
+
+                <!-- Başlık -->
+                <TextBlock Text="Kapalı Otopark Yıkama Girişi"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="#1B2B4A"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,6"/>
+
+                <TextBlock Text="Lütfen oturum açmak için bilgilerinizi giriniz."
+                           FontSize="12.5"
+                           Foreground="#6B7A99"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,22"/>
+
+                <!-- Kullanıcı -->
+                <TextBlock Text="Kullanıcı Adı veya Email"
+                           Foreground="#6B7A99"
+                           FontSize="12"
+                           Margin="2,0,0,6"/>
+
+                <TextBox x:Name="UserBox"
+                         Height="44"
+                         Padding="12,0"
+                         VerticalContentAlignment="Center"
+                         BorderBrush="#DDE3EE"
+                         Background="#F8FAFE"
+                         BorderThickness="1"/>
+
+                <!-- Şifre -->
+                <TextBlock Text="Şifre"
+                           Foreground="#6B7A99"
+                           FontSize="12"
+                           Margin="2,14,0,6"/>
+
+                <PasswordBox x:Name="PwdBox"
+                             Height="44"
+                             Padding="12,0"
+                             VerticalContentAlignment="Center"
+                             BorderBrush="#DDE3EE"
+                             Background="#F8FAFE"
+                             BorderThickness="1"
+                             KeyDown="PwdBox_KeyDown"/>
+
+                <!-- Firma -->
+                <TextBlock Text="Firma Kodu"
+                           Foreground="#6B7A99"
+                           FontSize="12"
+                           Margin="2,14,0,6"/>
+
+                <TextBox x:Name="CompanyBox"
+                         Height="44"
+                         Padding="12,0"
+                         VerticalContentAlignment="Center"
+                         BorderBrush="#DDE3EE"
+                         Background="#F8FAFE"
+                         BorderThickness="1"/>
+
+                <!-- Bölge -->
+                <TextBlock Text="Bölge"
+                           Foreground="#6B7A99"
+                           FontSize="12"
+                           Margin="2,14,0,6"/>
+
+                <ComboBox x:Name="ZoneCombo"
+                          Height="44"
+                          Padding="12,0"
+                          VerticalContentAlignment="Center"
+                          DisplayMemberPath="ZoneName"
+                          BorderBrush="#DDE3EE"
+                          Background="#F8FAFE"
+                          BorderThickness="1"
+                          IsEditable="True"
+                          IsReadOnly="True"
+                          Text="Bölge Seçiniz"/>
+
+                <!-- Hata mesajı -->
+                <TextBlock x:Name="ErrorText"
+                           Text=""
+                           Foreground="Red"
+                           FontSize="12"
+                           Margin="0,12,0,0"
+                           TextWrapping="Wrap"/>
+
+                <!-- Button -->
+                <Button x:Name="LoginBtn"
+                        Height="44"
+                        Margin="0,18,0,0"
+                        Content="Giriş Yap"
+                        Background="#2B7CFF"
+                        Foreground="White"
+                        BorderBrush="{x:Null}"
+                        FontWeight="SemiBold"
+                        Click="LoginBtn_Click"/>
+
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

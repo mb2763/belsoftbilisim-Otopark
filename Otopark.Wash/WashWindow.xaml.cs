@@ -1,14 +1,12 @@
 using Otopark.Api.Services;
 using Otopark.Core.Session;
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
-namespace Otopark.Client.Views
+namespace Otopark.Wash
 {
     public partial class WashWindow : Window
     {
@@ -104,7 +102,6 @@ namespace Otopark.Client.Views
                     return;
                 }
 
-                // Sonuc kutusu
                 ResultBox.Visibility = Visibility.Visible;
                 if (res.IsFree)
                 {
@@ -121,14 +118,12 @@ namespace Otopark.Client.Views
                 ResultDetail.Text =
                     $"Plaka: {res.Plate}\n" +
                     $"Giriş: {res.EntryTime:dd.MM.yyyy HH:mm}\n" +
-                    $"İçeride: {res.MinutesIn} dk  ·  Ücretsiz süre: {res.FreeMinutes} dk\n" +
+                    $"İçeride: {res.MinutesIn} dk\n" +
                     $"Fiş Saati: {res.ReceiptTime:dd.MM.yyyy HH:mm}\n" +
                     $"Tutar: {res.ChargedAmount:0.##} TL";
 
-                // Yazdir (basit metin fis)
                 PrintReceiptDocument(res);
 
-                // Listeyi yenile (artik alreadyWashed=true gelir)
                 await LoadAsync();
             }
             catch (Exception ex)
@@ -164,7 +159,6 @@ namespace Otopark.Client.Views
                 Line($"Plaka      : {res.Plate}", true);
                 Line($"Giriş      : {res.EntryTime:dd.MM.yyyy HH:mm}");
                 Line($"İçeride    : {res.MinutesIn} dk");
-                Line($"Ücretsiz   : {res.FreeMinutes} dk");
                 Line($"Fiş Saati  : {res.ReceiptTime:dd.MM.yyyy HH:mm}");
                 Line("--------------------------------");
                 Line($"TUTAR      : {res.ChargedAmount:0.##} TL", true, 16);
@@ -172,7 +166,6 @@ namespace Otopark.Client.Views
                 Line(res.IsFree ? "(Ücretsiz süre içinde)" : "(Ücretsiz süre aşıldı)");
 
                 var pd = new System.Windows.Controls.PrintDialog();
-                // Diyalog gostermeden varsayilan yazici (kiosk icin). Diyalog isteniyorsa pd.ShowDialog().
                 System.Windows.Documents.IDocumentPaginatorSource src = doc;
                 pd.PrintDocument(src.DocumentPaginator, "Yikama Fisi - " + res.Plate);
             }

@@ -1,4 +1,4 @@
-<Window x:Class="Otopark.Client.Views.WashWindow"
+<Window x:Class="Otopark.Wash.WashWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Yıkama Ekranı" Height="720" Width="1080"
@@ -9,7 +9,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Baslik + serbest sure -->
+        <!-- Baslik + Yenile (Ucretsiz sure web'de tanimli; burada gosterilmez) -->
         <Grid Grid.Row="0" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -17,7 +17,6 @@
             </Grid.ColumnDefinitions>
             <TextBlock Text="YIKAMA EKRANI" FontSize="26" FontWeight="Bold" Foreground="#1B2B4A" VerticalAlignment="Center"/>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <!-- Ucretsiz sure ARTIK web'de tanimli (WASH_SETTING); burada gosterilmez/girilmez. -->
                 <Button x:Name="RefreshBtn" Content="Yenile" Width="110" Height="36"
                         FontSize="15" Click="RefreshBtn_Click"/>
             </StackPanel>

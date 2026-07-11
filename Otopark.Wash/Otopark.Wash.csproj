@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Otopark.Wash</AssemblyName>
+    <RootNamespace>Otopark.Wash</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Otopark.Api\Otopark.Api.csproj" />
+    <ProjectReference Include="..\Otopark.Core\Otopark.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\logo_left.png" />
+    <Resource Include="Assets\kurum_logo.png" />
+  </ItemGroup>
+
+</Project>
