@@ -75,7 +75,10 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel>
                                             <TextBlock Text="{Binding Plate}" FontSize="24" FontWeight="Bold" Foreground="#111827"/>
-                                            <TextBlock Text="{Binding MinutesIn, StringFormat='{}{0} dk içeride'}" FontSize="14" Foreground="#6B7280"/>
+                                            <!-- Ucretsiz sureden GERIYE sayim; sure dolunca otopark ucreti gosterilir. -->
+                                            <TextBlock Text="{Binding CountdownText}" FontSize="16" FontWeight="Bold"
+                                                       Foreground="{Binding CountdownBrush}"/>
+                                            <TextBlock Text="{Binding MinutesIn, StringFormat='{}{0} dk içeride'}" FontSize="12" Foreground="#9CA3AF"/>
                                         </StackPanel>
                                         <Border Grid.Column="1" VerticalAlignment="Center" CornerRadius="6" Padding="8,4"
                                                 Background="{Binding WashedBrush}">

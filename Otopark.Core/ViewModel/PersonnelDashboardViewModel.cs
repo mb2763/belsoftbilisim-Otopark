@@ -89,13 +89,25 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     [ObservableProperty] private bool isStatusAll;                    // Hepsi (iptal dahil)
     [ObservableProperty] private bool isStatusBlacklist;             // Kara liste (odenmemis borcu olan araclar)
 
-    partial void OnIsStatusAllInOutChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusApprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusUnapprovedOnlyChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusUnapprovedChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusCancelledChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusAllChanged(bool value) { if (value) ApplyFiltersInternal(); }
-    partial void OnIsStatusBlacklistChanged(bool value) { if (value) ApplyFiltersInternal(); }
+    // NOT: Iptaller ve Kara Liste FARKLI veri kaynagi kullanir (silinmis girisler / borc kayitlari),
+    // bu yuzden secildiklerinde ve birakildiklarinda liste yeniden YUKLENIR; digerlerinde filtre yeter.
+    partial void OnIsStatusAllInOutChanged(bool value) { if (value) ReloadOrFilter(); }
+    partial void OnIsStatusApprovedChanged(bool value) { if (value) ReloadOrFilter(); }
+    partial void OnIsStatusUnapprovedOnlyChanged(bool value) { if (value) ReloadOrFilter(); }
+    partial void OnIsStatusUnapprovedChanged(bool value) { if (value) ReloadOrFilter(); }
+    partial void OnIsStatusCancelledChanged(bool value) { if (value) _ = LoadParkDataAsync(); }
+    partial void OnIsStatusAllChanged(bool value) { if (value) ReloadOrFilter(); }
+    partial void OnIsStatusBlacklistChanged(bool value) { if (value) _ = LoadParkDataAsync(); }
+
+    /// <summary>Ozel kaynakli (iptal/kara liste) listeden normal listeye donuluyorsa yeniden yukle; degilse sadece filtrele.</summary>
+    private void ReloadOrFilter()
+    {
+        if (_specialSourceLoaded) { _ = LoadParkDataAsync(); return; }
+        ApplyFiltersInternal();
+    }
+
+    /// <summary>Son yuklenen liste ozel kaynaktan mi geldi (iptaller / kara liste)?</summary>
+    private bool _specialSourceLoaded;
 
     // Filtre: Zaman
     [ObservableProperty] private bool isTimeShift = true;
@@ -211,19 +223,37 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         try
         {
+            // KARA LISTE: tarihten BAGIMSIZ — bolgede odenmemis (eski) borcu olan TUM araclar.
+            // Arac o gun otoparka girmemis olsa bile listelenir.
+            if (IsStatusBlacklist)
+            {
+                _specialSourceLoaded = true;
+                await LoadBlacklistDataAsync();
+                return;
+            }
+
+            // Iptaller de ozel kaynak; normal listeye donunce yeniden yukleme gerekir.
+            _specialSourceLoaded = IsStatusCancelled;
+
             List<VewVehicleParkCurrentDto> data;
 
-            if (IsTimeWeek)
+            // Secili zaman araligi (Mesai/Gun -> bugun, Hafta -> 7 gun, Ay -> 30 gun)
+            DateTime? rangeStart = IsTimeWeek ? DateTime.Now.AddDays(-7)
+                                 : IsTimeMonth ? DateTime.Now.AddDays(-30)
+                                 : (DateTime?)null;
+
+            // IPTALLER: iptal edilen girisler sunucuda soft-delete edildigi icin normal
+            // liste sorgusunda GELMEZ; ayri (silinmis kayitlar) sorgusu kullanilir.
+            if (IsStatusCancelled)
             {
-                data = await _parkQuery.GetByZoneAndDateRangeAsync(
+                data = await _parkQuery.GetCancelledByZoneAndDateRangeAsync(
                     UserSession.CompanyId, BolgeId,
-                    DateTime.Now.AddDays(-7), DateTime.Now);
+                    rangeStart ?? DateTime.Now.Date, DateTime.Now);
             }
-            else if (IsTimeMonth)
+            else if (rangeStart.HasValue)
             {
                 data = await _parkQuery.GetByZoneAndDateRangeAsync(
-                    UserSession.CompanyId, BolgeId,
-                    DateTime.Now.AddDays(-30), DateTime.Now);
+                    UserSession.CompanyId, BolgeId, rangeStart.Value, DateTime.Now);
             }
             else
             {
@@ -240,7 +270,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     EntryId = d.EntryId,
                     Plate = d.Plate ?? "",
                     ParkingName = LoggedZoneName,
-                    ParkType = d.ExitTimestamp.HasValue ? "Cikis" : "Giris",
+                    // Iptaller sekmesinde gelen kayitlar SILINMIS girislerdir -> "Iptal" olarak isaretlenir.
+                    ParkType = IsStatusCancelled ? "Iptal"
+                             : (d.ExitTimestamp.HasValue ? "Cikis" : "Giris"),
                     EntryDateTime = d.EntryTimestamp,
                     ExitDateTime = d.ExitTimestamp,
                     EntryPlateImagePath = "",
@@ -273,6 +305,45 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// KARA LISTE verisi: bu (kapali otopark) bolgesinde ODENMEMIS eski borcu olan TUM araclar.
+    /// Tarih sinirlamasi yoktur; arac bugun otoparka girmemis olsa bile borcu varsa listelenir.
+    /// </summary>
+    private async Task LoadBlacklistDataAsync()
+    {
+        try
+        {
+            var debtors = await _parkQuery.GetZoneDebtorsAsync(UserSession.CompanyId, BolgeId);
+
+            _allVehicles.Clear();
+            foreach (var d in debtors)
+            {
+                _allVehicles.Add(new VehicleRow
+                {
+                    EntryId = 0,
+                    Plate = d.Plate ?? "",
+                    ParkingName = LoggedZoneName,
+                    ParkType = "Borclu",              // giris/cikis kaydi degil, borc kaydi
+                    EntryDateTime = d.LastDebtDate,   // en son borc tarihi
+                    ExitDateTime = null,
+                    OldDebt = d.DebtAmount,           // IsBlacklisted => OldDebt > 0
+                    CurrentDebt = 0m,
+                    TotalDebt = d.DebtAmount,
+                    ExitFee = 0m,
+                    EntryPlateImagePath = "",
+                    ExitPlateImagePath = "",
+                });
+            }
+
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Kara liste yuklenemedi: " + ex.Message, false);
+        }
+    }
+
     // Admin icin tum bolgeleri yukle
     public async Task LoadAllZonesAsync()
     {
@@ -288,6 +359,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     private void UpdateParkCounts()
     {
+        // Kara liste / Iptaller modunda _allVehicles otoparkin MEVCUT nufusu DEGILDIR
+        // (borc kayitlari veya silinmis girisler). Sayac ve hasilat bozulmasin diye guncellenmez.
+        if (IsStatusBlacklist || IsStatusCancelled) return;
+
         CurrentVehicleCount = _allVehicles.Count(v => v.ExitDateTime == null);
         EmptyParkCount = Math.Max(0, TotalCapacity - CurrentVehicleCount);
         // Hasilat: yalnizca CIKIS yapan araclarin (bu bolge) cikis tutarlari sayilir.
@@ -1181,12 +1256,15 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         else if (IsStatusCancelled)
             filtered = filtered.Where(v => v.ParkType == "Iptal");
         else if (IsStatusBlacklist)
-            filtered = filtered.Where(v => v.IsBlacklisted && v.ParkType != "Iptal"); // Kara liste: odenmemis borcu olanlar
+            filtered = filtered.Where(v => v.IsBlacklisted); // Kara liste: odenmemis borcu olan TUM araclar
         // IsStatusAll -> filtre yok (iptal dahil hepsi)
 
-        // Mesai filtresi (API bugunun verisini dondurur, mesai saatine gore daralt)
-        // Kara liste modunda mesai filtresi uygulanmaz (tum borclular gorunsun).
-        if (IsTimeShift && !IsStatusBlacklist)
+        // Mesai filtresi (API bugunun verisini dondurur, mesai saatine gore daralt).
+        // ONAYLILAR / IPTALLER / KARA LISTE sekmelerinde UYGULANMAZ:
+        //  - Kara liste zaten tarihten bagimsizdir (tum borclular),
+        //  - Onaylilar ve Iptaller icin "cikisi yapilmis/iptal edilmis TUM kayitlar" istenir
+        //    (dun girip bugun cikan arac mesai daraltmasinda kayboluyordu).
+        if (IsTimeShift && !IsStatusBlacklist && !IsStatusCancelled && !IsStatusApproved)
         {
             var now = DateTime.Now;
             var shiftStart = now.Date.AddHours(now.Hour >= 8 ? 8 : -16);

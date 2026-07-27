@@ -589,31 +589,47 @@ namespace Otopark.Client.Views
             return null;
         }
 
-        // ===== TABLO RESIM CIFT TIKLAMA =====
+        // ===== TABLO RESME TIKLAMA -> PLAKA DUZENLEME =====
+        // Gridde "Duzelt" butonu KALDIRILDI. Plaka duzeltmek icin satirdaki (giris/cikis)
+        // arac fotografina tiklanir: acilan pencerede fotograf + ESKI PLAKA gorunur,
+        // YENI PLAKA girilip kaydedilir.
 
-        private void PlateImage_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private async void PlateImage_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            if (e.ClickCount != 2) return; // sadece cift tiklama
             if (sender is not System.Windows.Controls.Border border) return;
             if (border.DataContext is not Otopark.Core.PersonnelDashboardViewModel.VehicleRow row) return;
+            if (DataContext is not PersonnelDashboardViewModel vm) return;
+
+            // Kara liste (borc kaydi) ve iptal edilmis girislerde plaka duzeltme yapilamaz.
+            if (row.EntryId <= 0 || row.ParkType == "Borclu")
+            {
+                vm.ShowBarrierToast(false, "Bu kayit icin plaka duzeltme yapilamaz.");
+                return;
+            }
+            if (row.ParkType == "Iptal")
+            {
+                vm.ShowBarrierToast(false, "Iptal edilmis kaydin plakasi duzeltilemez.");
+                return;
+            }
 
             string side = (border.Tag as string) ?? "entry";
             bool isEntry = side == "entry";
             string imgPath = isEntry ? row.EntryPlateImagePath : row.ExitPlateImagePath;
-            string title = isEntry ? "Giris Plaka Goruntusu" : "Cikis Plaka Goruntusu";
 
-            if (string.IsNullOrWhiteSpace(imgPath) || !File.Exists(imgPath))
-            {
-                if (DataContext is PersonnelDashboardViewModel vm)
-                    vm.ShowBarrierToast(false, "Bu kayit icin gorsel yok.");
-                return;
-            }
+            // Gorsel yoksa da plaka duzeltilebilsin (fotograf paneli bos kalir).
+            if (!string.IsNullOrWhiteSpace(imgPath) && !File.Exists(imgPath))
+                imgPath = "";
 
-            var popup = new PlateImagePopup(row.Plate, imgPath, title)
+            string? newPlate = null;
+            var popup = new CorrectPlateWindow(row.Plate, imgPath)
             {
                 Owner = Window.GetWindow(this)
             };
-            popup.ShowDialog();
+            if (popup.ShowDialog() == true)
+                newPlate = popup.NewPlate;
+
+            if (!string.IsNullOrWhiteSpace(newPlate) && newPlate != row.Plate)
+                await vm.ApplyPlateCorrectionAsync(row, newPlate);
         }
 
         // ===== BARIYER =====

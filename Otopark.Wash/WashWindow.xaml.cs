@@ -14,26 +14,64 @@ namespace Otopark.Wash
         public ObservableCollection<WashRow> Rows { get; } = new();
         private WashRow? _selected;
 
+        /// <summary>Geri sayimi her saniye tazeleyen zamanlayici.</summary>
+        private System.Windows.Threading.DispatcherTimer? _tick;
+        /// <summary>Son sunucu yenilemesi (ucret guncel kalsin diye periyodik yenilenir).</summary>
+        private DateTime _lastServerRefresh = DateTime.MinValue;
+
         public WashWindow(VehicleParkApiService api)
         {
             InitializeComponent();
             _api = api;
             EntryList.ItemsSource = Rows;
-            Loaded += async (_, __) => await LoadAsync();
+            Loaded += async (_, __) =>
+            {
+                await LoadAsync();
+                StartCountdownTimer();
+            };
+            Closed += (_, __) => _tick?.Stop();
         }
 
-        private async System.Threading.Tasks.Task LoadAsync()
+        /// <summary>
+        /// Saniyede bir tum satirlarin geri sayimini tazeler. Ayrica sunucudan gelen
+        /// ucret bilgisi guncel kalsin diye 60 sn'de bir liste yeniden yuklenir.
+        /// </summary>
+        private void StartCountdownTimer()
+        {
+            _tick = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _tick.Tick += async (_, __) =>
+            {
+                foreach (var r in Rows) r.RefreshCountdown();
+
+                // Sure dolan arac varsa ucret sunucudan gelir; dakikada bir tazele.
+                if ((DateTime.Now - _lastServerRefresh).TotalSeconds >= 60)
+                    await LoadAsync(keepSelection: true);
+            };
+            _tick.Start();
+        }
+
+        private async System.Threading.Tasks.Task LoadAsync(bool keepSelection = false)
         {
             try
             {
+                long onceSecili = keepSelection ? (_selected?.EntryId ?? 0) : 0;
+
                 Rows.Clear();
-                _selected = null;
-                SelectedPlateText.Text = "—";
-                SelectedInfoText.Text = "Sağdaki listeden bir araç seçiniz.";
-                PrintBtn.IsEnabled = false;
-                ResultBox.Visibility = Visibility.Collapsed;
+                if (!keepSelection)
+                {
+                    _selected = null;
+                    SelectedPlateText.Text = "—";
+                    SelectedInfoText.Text = "Sağdaki listeden bir araç seçiniz.";
+                    PrintBtn.IsEnabled = false;
+                    ResultBox.Visibility = Visibility.Collapsed;
+                }
 
                 var list = await _api.GetWashRecentEntriesAsync(UserSession.CompanyId, 15);
+                _lastServerRefresh = DateTime.Now;
+
                 foreach (var e in list)
                 {
                     Rows.Add(new WashRow
@@ -42,15 +80,26 @@ namespace Otopark.Wash
                         Plate = e.Plate ?? "",
                         MinutesIn = e.MinutesIn,
                         EntryTime = e.EntryTime,
-                        AlreadyWashed = e.AlreadyWashed
+                        AlreadyWashed = e.AlreadyWashed,
+                        FreeMinutes = e.FreeMinutes > 0 ? e.FreeMinutes : 120,
+                        Fee = e.Fee
                     });
                 }
-                if (Rows.Count == 0)
+
+                // Otomatik yenilemede secili arac korunur (kullanicinin secimi kaybolmasin).
+                if (onceSecili > 0)
+                {
+                    var yeni = Rows.FirstOrDefault(r => r.EntryId == onceSecili);
+                    if (yeni != null) EntryList.SelectedItem = yeni;
+                }
+
+                if (Rows.Count == 0 && !keepSelection)
                     SelectedInfoText.Text = "Otoparkta araç bulunmuyor.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Liste alınamadı: " + ex.Message, "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
+                if (!keepSelection)
+                    MessageBox.Show("Liste alınamadı: " + ex.Message, "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -176,13 +225,54 @@ namespace Otopark.Wash
         }
     }
 
-    public sealed class WashRow
+    public sealed class WashRow : System.ComponentModel.INotifyPropertyChanged
     {
         public long EntryId { get; set; }
         public string Plate { get; set; } = "";
         public int MinutesIn { get; set; }
         public DateTime EntryTime { get; set; }
         public bool AlreadyWashed { get; set; }
+
+        /// <summary>Tanimli ucretsiz sure (dk) — WASH_SETTING'ten gelir.</summary>
+        public int FreeMinutes { get; set; }
+        /// <summary>Sunucunun bildirdigi ucret (sure dolduysa dolu).</summary>
+        public decimal Fee { get; set; }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>
+        /// Ucretsiz surenin bitimine kalan sure. Giris zamani + serbest sureden ANLIK hesaplanir,
+        /// bu yuzden ekranda gercek zamanli olarak geriye sayar (159, 158, ...).
+        /// </summary>
+        public TimeSpan Remaining
+        {
+            get
+            {
+                var bitis = EntryTime.AddMinutes(FreeMinutes);
+                var kalan = bitis - DateTime.Now;
+                return kalan > TimeSpan.Zero ? kalan : TimeSpan.Zero;
+            }
+        }
+
+        public bool IsExpired => Remaining <= TimeSpan.Zero;
+
+        /// <summary>Listede gosterilen sure/ucret metni.</summary>
+        public string CountdownText => IsExpired
+            ? (Fee > 0 ? $"Süre doldu — Ücret: {Fee:0.##} ₺" : "Süre doldu — ücretli")
+            : $"Kalan: {(int)Remaining.TotalMinutes} dk {Remaining.Seconds:D2} sn";
+
+        public Brush CountdownBrush => IsExpired
+            ? (Brush)new BrushConverter().ConvertFrom("#DC2626")!   // kirmizi: sure doldu
+            : (Brush)new BrushConverter().ConvertFrom("#059669")!;  // yesil: devam ediyor
+
+        /// <summary>Zamanlayici her saniye cagirir: geri sayim alanlarini tazeler.</summary>
+        public void RefreshCountdown()
+        {
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Remaining)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsExpired)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountdownText)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountdownBrush)));
+        }
 
         public string WashedText => AlreadyWashed ? "FİŞLİ" : "BEKLİYOR";
         public Brush WashedBrush => AlreadyWashed

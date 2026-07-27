@@ -301,6 +301,15 @@ public class WashEntryDto
     public int MinutesIn { get; set; }
     public long ZoneId { get; set; }
     public bool AlreadyWashed { get; set; }
+
+    /// <summary>Tanimli ucretsiz (serbest) sure — dakika. WASH_SETTING'ten gelir.</summary>
+    public int FreeMinutes { get; set; }
+    /// <summary>Ucretsiz sureden geriye kalan dakika (0 = doldu).</summary>
+    public int RemainingMinutes { get; set; }
+    /// <summary>Ucretsiz sure doldu mu?</summary>
+    public bool IsExpired { get; set; }
+    /// <summary>Sure dolduysa ilgili otoparkin ucreti.</summary>
+    public decimal Fee { get; set; }
 }
 
 public class WashReceiptResult

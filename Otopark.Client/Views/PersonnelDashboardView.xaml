@@ -322,17 +322,8 @@
                                 <DataGridTextColumn Header="ANLIK" Binding="{Binding CurrentDebt, StringFormat=N2}" Width="65"/>
                                 <DataGridTextColumn Header="TOPLAM" Binding="{Binding TotalDebt, StringFormat=N2}" Width="75"/>
 
-                                <DataGridTemplateColumn Header="" Width="60">
-                                    <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <Button Content="Duzelt" Height="24" Margin="1"
-                                                    Background="#FFB300" Foreground="White"
-                                                    BorderThickness="0" FontSize="10"
-                                                    Command="{Binding DataContext.CorrectPlateCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                    CommandParameter="{Binding}"/>
-                                        </DataTemplate>
-                                    </DataGridTemplateColumn.CellTemplate>
-                                </DataGridTemplateColumn>
+                                <!-- "Duzelt" butonu KALDIRILDI: plaka duzeltme artik satirdaki
+                                     arac FOTOGRAFINA tiklanarak yapilir (eski plaka gorunur + yeni plaka girilir). -->
 
                                 <DataGridTemplateColumn Header="" Width="55">
                                     <DataGridTemplateColumn.CellTemplate>

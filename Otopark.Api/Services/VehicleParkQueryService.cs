@@ -53,6 +53,58 @@ public sealed class VehicleParkQueryService
 
         return JsonSerializer.Deserialize<List<VewVehicleParkCurrentDto>>(json, JsonOpts) ?? new();
     }
+
+    /// <summary>
+    /// IPTAL EDILMIS (soft-delete) girisler — bolge + tarih araligi. "Iptaller" sekmesi icin.
+    /// Normal liste sorgulari silinmis kayitlari dondurmez.
+    /// </summary>
+    public async Task<List<VewVehicleParkCurrentDto>> GetCancelledByZoneAndDateRangeAsync(
+        long companyId, long entryZoneId, DateTime startDate, DateTime endDate)
+    {
+        var url = "VehiclePark/GetCancelledVehicleParkByZoneAndDateRange";
+
+        using var response = await _http.PostAsJsonAsync(url, new
+        {
+            companyId = companyId,
+            entryZoneId = entryZoneId,
+            startDate = startDate,
+            endDate = endDate
+        });
+
+        var json = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode) return new();
+
+        return JsonSerializer.Deserialize<List<VewVehicleParkCurrentDto>>(json, JsonOpts) ?? new();
+    }
+
+    /// <summary>
+    /// KARA LISTE: bolgede odenmemis (eski) borcu olan TUM araclar. Tarih sinirlamasi yoktur.
+    /// </summary>
+    public async Task<List<ZoneDebtorDto>> GetZoneDebtorsAsync(long companyId, long zoneId)
+    {
+        var url = "VehiclePark/GetZoneDebtorVehicles";
+
+        using var response = await _http.PostAsJsonAsync(url, new
+        {
+            companyId = companyId,
+            entryZoneId = zoneId
+        });
+
+        var json = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode) return new();
+
+        return JsonSerializer.Deserialize<List<ZoneDebtorDto>>(json, JsonOpts) ?? new();
+    }
+}
+
+/// <summary>Kara liste satiri: bolgede odenmemis borcu olan arac.</summary>
+public class ZoneDebtorDto
+{
+    public long VehicleDefinitionId { get; set; }
+    public string? Plate { get; set; }
+    public decimal DebtAmount { get; set; }
+    public int DebtCount { get; set; }
+    public DateTime LastDebtDate { get; set; }
 }
 
 public class VewVehicleParkCurrentDto
