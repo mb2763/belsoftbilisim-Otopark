@@ -296,6 +296,43 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     _ = LoadEntryImageAsync(row, d.EntryId);
             }
 
+            // TUMU sekmesinde: kiosk uzerinden islem gormus (gunluk ucret/abonelik/borc) ama
+            // FIZIKSEL GIRIS KAYDI (VEHICLE_PARK_ENTRIES) olusmamis plakalar normal sorguda
+            // (yukaridaki VEW_VEHICLE_PARK bazli liste) hic gorunmuyordu; personel bu araclarin
+            // cikisini/plakasini "Tumu" listesinden bulamiyordu. Bu bolgede odenmemis borcu olan
+            // TUM plakalar (GetZoneDebtorsAsync, tarihten bagimsiz) buraya da eklenir; zaten
+            // normal listede olanlar (plaka bazinda) TEKRAR EKLENMEZ.
+            if (IsStatusAllInOut)
+            {
+                try
+                {
+                    var debtors = await _parkQuery.GetZoneDebtorsAsync(UserSession.CompanyId, BolgeId);
+                    var mevcutPlakalar = _allVehicles.Select(v => v.Plate.ToUpperInvariant()).ToHashSet();
+                    foreach (var b in debtors)
+                    {
+                        var plaka = (b.Plate ?? "").ToUpperInvariant();
+                        if (string.IsNullOrWhiteSpace(plaka) || mevcutPlakalar.Contains(plaka)) continue;
+
+                        _allVehicles.Add(new VehicleRow
+                        {
+                            EntryId = 0,
+                            Plate = b.Plate ?? "",
+                            ParkingName = LoggedZoneName,
+                            ParkType = "Borclu",           // giris kaydi yok; sadece borc kaydi
+                            EntryDateTime = b.LastDebtDate,
+                            ExitDateTime = null,
+                            OldDebt = b.DebtAmount,
+                            CurrentDebt = 0m,
+                            TotalDebt = b.DebtAmount,
+                            ExitFee = 0m,
+                            EntryPlateImagePath = "",
+                            ExitPlateImagePath = "",
+                        });
+                    }
+                }
+                catch { /* ek liste alinamazsa ana liste yine de gorunur kalsin */ }
+            }
+
             UpdateParkCounts();
             ApplyFiltersInternal();
         }
@@ -363,7 +400,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         // (borc kayitlari veya silinmis girisler). Sayac ve hasilat bozulmasin diye guncellenmez.
         if (IsStatusBlacklist || IsStatusCancelled) return;
 
-        CurrentVehicleCount = _allVehicles.Count(v => v.ExitDateTime == null);
+        // "Borclu" satirlar (Tumu sekmesine eklenen, fiziksel girisi olmayan borc kayitlari)
+        // icerideki arac sayisina DAHIL EDILMEZ - gercekte otoparkta degiller.
+        CurrentVehicleCount = _allVehicles.Count(v => v.ExitDateTime == null && v.ParkType != "Borclu");
         EmptyParkCount = Math.Max(0, TotalCapacity - CurrentVehicleCount);
         // Hasilat: yalnizca CIKIS yapan araclarin (bu bolge) cikis tutarlari sayilir.
         // Iceride bekleyen veya iptal edilen araclar hasilata yansimaz.

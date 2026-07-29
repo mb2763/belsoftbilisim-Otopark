@@ -21,14 +21,9 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainViewModel.CurrentView))
         {
-            if (_vm.CurrentView is PersonnelDashboardViewModel)
-            {
-                WindowState = WindowState.Maximized;
-            }
-            else
-            {
-                WindowState = WindowState.Normal;
-            }
+            // TAM EKRAN: uygulama her ekranda (login dahil) ekrani tamamen kaplar.
+            // Eskiden login ekraninda WindowState.Normal'a dusuluyordu; kaldirildi.
+            WindowState = WindowState.Maximized;
         }
     }
 }

@@ -237,20 +237,129 @@ public partial class VehicleParkApiService
 
     // ===== YIKAMA (Wash) =====
 
-    /// <summary>Kapali otoparktaki son N icerideki arac (yikama listesi).</summary>
+    /// <summary>
+    /// Kapali otoparktaki son N icerideki arac (yikama listesi).
+    /// ONCE Wash/GetRecentEntries denenir (ucret + "fisli mi" bilgisi oradan gelir).
+    /// O uc nokta hata verir ya da BOS donerse (ornegin sunucuda eski surum varsa),
+    /// dashboard'in da kullandigi CALISAN uc noktalardan (Zone/GetZones +
+    /// VehiclePark/GetVehicleParkByZoneToday) liste kurulur. Boylece yikama ekrani
+    /// API guncellenmemis olsa bile plakalari gosterir.
+    /// </summary>
     public async Task<List<WashEntryDto>> GetWashRecentEntriesAsync(long companyId, int take = 15)
     {
+        // 1) Asil uc nokta
         try
         {
             var url = $"Wash/GetRecentEntries?companyId={companyId}&take={take}";
             using var response = await _http.GetAsync(url);
-            if (!response.IsSuccessStatusCode) return new();
-            var json = await response.Content.ReadAsStringAsync();
-            var env = JsonSerializer.Deserialize<WashEntriesEnvelope>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            return env?.Data ?? new();
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                var env = JsonSerializer.Deserialize<WashEntriesEnvelope>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (env?.Data != null && env.Data.Count > 0)
+                    return env.Data;
+            }
         }
+        catch { /* yedek yola dusulur */ }
+
+        // 2) YEDEK: kapali otopark bolgeleri -> bugun iceride olan araclar
+        try { return await GetWashEntriesFallbackAsync(companyId, take); }
         catch { return new(); }
+    }
+
+    /// <summary>Yedek yol: Zone/GetZones (424) + VehiclePark/GetVehicleParkByZoneToday.</summary>
+    private async Task<List<WashEntryDto>> GetWashEntriesFallbackAsync(long companyId, int take)
+    {
+        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+        // Serbest sure (bu uc nokta calisiyor)
+        int freeMinutes = 120;
+        try
+        {
+            using var fr = await _http.GetAsync($"Wash/GetFreeMinutes?companyId={companyId}");
+            if (fr.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await fr.Content.ReadAsStringAsync());
+                if (doc.RootElement.TryGetProperty("freeMinutes", out var fm) && fm.TryGetInt32(out var v) && v > 0)
+                    freeMinutes = v;
+            }
+        }
+        catch { }
+
+        // Kapali otopark (424) bolgeleri
+        var zoneIds = new List<long>();
+        try
+        {
+            using var zr = await _http.PostAsJsonAsync("Zone/GetZones",
+                new { IsActive = true, CompanyId = companyId, ZoneClassId = 424 });
+            if (zr.IsSuccessStatusCode)
+            {
+                using var doc = JsonDocument.Parse(await zr.Content.ReadAsStringAsync());
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    foreach (var z in doc.RootElement.EnumerateArray())
+                        if (z.TryGetProperty("id", out var idEl) && idEl.TryGetInt64(out var zid))
+                            zoneIds.Add(zid);
+            }
+        }
+        catch { }
+        if (zoneIds.Count == 0) return new();
+
+        var now = DateTime.Now;
+        var list = new List<WashEntryDto>();
+
+        foreach (var zid in zoneIds)
+        {
+            try
+            {
+                using var pr = await _http.PostAsJsonAsync("VehiclePark/GetVehicleParkByZoneToday",
+                    new { CompanyId = companyId, EntryZoneId = zid });
+                if (!pr.IsSuccessStatusCode) continue;
+
+                using var doc = JsonDocument.Parse(await pr.Content.ReadAsStringAsync());
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
+
+                foreach (var e in doc.RootElement.EnumerateArray())
+                {
+                    // Cikisi yapilmis araclar yikama listesine girmez
+                    if (e.TryGetProperty("exitId", out var ex) && ex.ValueKind != JsonValueKind.Null) continue;
+
+                    string plate = e.TryGetProperty("plate", out var p) ? (p.GetString() ?? "") : "";
+                    if (string.IsNullOrWhiteSpace(plate)) continue;
+
+                    long entryId = e.TryGetProperty("entryId", out var ei) && ei.TryGetInt64(out var eid) ? eid : 0;
+                    DateTime entryTime = e.TryGetProperty("entryTimestamp", out var et) && et.TryGetDateTime(out var dt) ? dt : now;
+                    decimal fee = 0m;
+                    if (e.TryGetProperty("calculatedFee", out var cf) && cf.ValueKind == JsonValueKind.Number)
+                        fee = cf.GetDecimal();
+
+                    int minutesIn = (int)(now - entryTime).TotalMinutes;
+                    int remaining = freeMinutes - minutesIn;
+
+                    list.Add(new WashEntryDto
+                    {
+                        EntryId = entryId,
+                        Plate = plate,
+                        EntryTime = entryTime,
+                        MinutesIn = minutesIn,
+                        ZoneId = zid,
+                        AlreadyWashed = false,          // fis bilgisi yalnizca Wash uc noktasinda var
+                        FreeMinutes = freeMinutes,
+                        RemainingMinutes = remaining > 0 ? remaining : 0,
+                        IsExpired = remaining <= 0,
+                        Fee = remaining <= 0 ? fee : 0m
+                    });
+                }
+            }
+            catch { /* bu bolge atlanir */ }
+        }
+
+        return list
+            .GroupBy(x => x.EntryId)
+            .Select(g => g.First())
+            .OrderByDescending(x => x.EntryTime)
+            .Take(take)
+            .ToList();
     }
 
     /// <summary>Yikama fisi bas. Basariliysa Success=true ve tutar/sure bilgileri doner.</summary>

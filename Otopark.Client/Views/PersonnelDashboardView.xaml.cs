@@ -231,12 +231,24 @@ namespace Otopark.Client.Views
         {
             try
             {
+                // ONEMLI: Kamera tanimi GIRIS YAPILAN bolgeye gore cekilir.
+                // Eskiden appsettings'teki sabit Parking:BolgeId kullaniliyordu; o deger
+                // gercek bolge ile ayni olmadigi icin (ornegin config 342, secilen bolge 1350)
+                // web'deki kamera tanimi HIC BULUNAMIYORDU ve goruntu gelmiyordu.
                 long zoneId = 0;
-                try { zoneId = Services.AppConfigHelper.BolgeId; } catch { }
+                if (DataContext is PersonnelDashboardViewModel vmZone && vmZone.BolgeId > 0)
+                    zoneId = vmZone.BolgeId;
+                else
+                    try { zoneId = Services.AppConfigHelper.BolgeId; } catch { }
+
                 await Services.CameraConfigService.LoadAsync(Otopark.Core.Session.UserSession.CompanyId, zoneId);
             }
             catch { }
             Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
+
+            // Kamera cozulemediyse kullaniciya SEBEBINI bildir (eskiden sessizce goruntu gelmiyordu).
+            if (!string.IsNullOrWhiteSpace(Services.CameraDiag.LastError) && DataContext is PersonnelDashboardViewModel vmErr)
+                vmErr.ShowBarrierToast(false, "Kamera: " + Services.CameraDiag.LastError);
         }
 
         private void Stop()
@@ -589,6 +601,38 @@ namespace Otopark.Client.Views
             return null;
         }
 
+        /// <summary>
+        /// "KAPAT" butonu: kullanici programi dogrudan kapatabilir (yalnizca onay sorulur).
+        /// Sifreli kapatma icin kurum logosuna cift tiklama yolu da durmaktadir.
+        /// </summary>
+        private void CloseApp_Click(object sender, RoutedEventArgs e)
+        {
+            var cevap = MessageBox.Show(
+                "Program kapatılacak. Emin misiniz?",
+                "Programdan Çıkış",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (cevap == MessageBoxResult.Yes)
+                Application.Current.Shutdown();
+        }
+
+        // ===== KURUM LOGOSU -> PROGRAMDAN CIKIS =====
+
+        /// <summary>
+        /// Kurum (Kayseri Ulasim) logosuna CIFT TIKLAMA -> yonetici sifresi sorulur,
+        /// dogruysa program kapatilir. Uygulama tam ekran (baslik cubugu yok) calistigi
+        /// icin kapatmanin tek yolu budur.
+        /// </summary>
+        private void KurumLogo_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (e.ClickCount != 2) return;   // sadece CIFT tiklama
+
+            var dlg = new ExitPasswordWindow { Owner = Window.GetWindow(this) };
+            if (dlg.ShowDialog() == true)
+                Application.Current.Shutdown();
+        }
+
         // ===== TABLO RESME TIKLAMA -> PLAKA DUZENLEME =====
         // Gridde "Duzelt" butonu KALDIRILDI. Plaka duzeltmek icin satirdaki (giris/cikis)
         // arac fotografina tiklanir: acilan pencerede fotograf + ESKI PLAKA gorunur,
@@ -634,18 +678,49 @@ namespace Otopark.Client.Views
 
         // ===== BARIYER =====
 
+        /// <summary>
+        /// GIRIS BARIYERI: otopark doluysa (icerideki arac sayisi >= kapasite) bariyer ACILMAZ,
+        /// "Boş yer bulunmamaktadır" uyarisi verilir. Kapasite tanimsizsa (0) kontrol uygulanmaz.
+        /// </summary>
         private async void BarrierEntry_Click(object sender, RoutedEventArgs e)
         {
-            var result = await Services.BarrierService.OpenEntryGateAsync();
             if (DataContext is PersonnelDashboardViewModel vm)
-                vm.ShowBarrierToast(result.Success, result.Message);
+            {
+                if (vm.TotalCapacity > 0 && vm.CurrentVehicleCount >= vm.TotalCapacity)
+                {
+                    vm.ShowBarrierToast(false,
+                        $"Boş yer bulunmamaktadır ({vm.CurrentVehicleCount}/{vm.TotalCapacity}). Giriş bariyeri açılmaz.");
+                    return;
+                }
+            }
+
+            var result = await Services.BarrierService.OpenEntryGateAsync();
+            if (DataContext is PersonnelDashboardViewModel vm2)
+                vm2.ShowBarrierToast(result.Success, result.Message);
         }
 
+        /// <summary>
+        /// CIKIS BARIYERI: listeden secili aracin (SelectedVehicle) Kapali Otopark ESKI borcu
+        /// (OldDebt - VEHICLE_CREDIT'ten gelen, kara liste ile ayni kaynak) varsa bariyer ACILMAZ,
+        /// "Borç ödenmeden bariyer açılmaz" uyarisi verilir. Secili arac yoksa (manuel/kamera
+        /// tabanli akis) kontrol atlanir - mevcut davranis korunur.
+        /// </summary>
         private async void BarrierExit_Click(object sender, RoutedEventArgs e)
         {
-            var result = await Services.BarrierService.OpenExitGateAsync();
             if (DataContext is PersonnelDashboardViewModel vm)
-                vm.ShowBarrierToast(result.Success, result.Message);
+            {
+                var sel = vm.SelectedVehicle;
+                if (sel != null && sel.OldDebt > 0)
+                {
+                    vm.ShowBarrierToast(false,
+                        $"{sel.Plate}: Kapalı Otopark borcu ({sel.OldDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.");
+                    return;
+                }
+            }
+
+            var result = await Services.BarrierService.OpenExitGateAsync();
+            if (DataContext is PersonnelDashboardViewModel vm3)
+                vm3.ShowBarrierToast(result.Success, result.Message);
         }
 
         // ===== MANUEL YAKALAMA =====

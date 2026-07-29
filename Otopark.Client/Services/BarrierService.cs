@@ -20,8 +20,26 @@ public static class BarrierService
         Timeout = TimeSpan.FromSeconds(5)
     };
 
-    private static string EntryUrl => AppConfig.Configuration["Barrier:EntryCommandUrl"] ?? "";
-    private static string ExitUrl => AppConfig.Configuration["Barrier:ExitCommandUrl"] ?? "";
+    // Bariyer komutu KAMERANIN IO portuna gider; yani bariyer IP'si = kamera IP'si.
+    // Once appsettings (Barrier:*) kullanilir; ORADA YOKSA web'den (ZONE_CAMERA) gelen
+    // kamera IP'sinden IO komut adresi turetilir. Boylece kamera IP'leri config'den
+    // kaldirilinca bariyer de web'deki tanimi takip eder.
+    private static string EntryUrl => Resolve(AppConfig.Configuration["Barrier:EntryCommandUrl"], CameraConfigService.EntryUrl);
+    private static string ExitUrl => Resolve(AppConfig.Configuration["Barrier:ExitCommandUrl"], CameraConfigService.ExitUrl);
+
+    /// <summary>Config'te komut adresi varsa onu; yoksa kamera URL'indeki host'tan Axis IO komutunu uretir.</summary>
+    private static string Resolve(string? configUrl, string cameraUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(configUrl)) return configUrl!;
+        if (string.IsNullOrWhiteSpace(cameraUrl)) return "";
+        try
+        {
+            var host = new Uri(cameraUrl).Host;
+            if (string.IsNullOrWhiteSpace(host)) return "";
+            return $"http://{host}/axis-cgi/io/port.cgi?action=2:/1000\\";
+        }
+        catch { return ""; }
+    }
     private static int DelayMs => int.TryParse(AppConfig.Configuration["Barrier:DelayMs"], out var d) ? d : 100;
 
     // FIX 1 — Bariyer cooldown'u: her bariyer (Giris/Cikis) icin son acma'dan sonra

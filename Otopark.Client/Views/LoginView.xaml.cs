@@ -27,4 +27,17 @@ public partial class LoginView : UserControl
             vm.Password = PwdBox.Password;
         }
     }
+
+    /// <summary>
+    /// Kurum logosuna CIFT TIKLAMA -> yonetici sifresi sorulur, dogruysa program kapatilir.
+    /// Uygulama tam ekran (baslik cubugu yok) calistigi icin kapatmanin yoludur.
+    /// </summary>
+    private void KurumLogo_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;   // sadece CIFT tiklama
+
+        var dlg = new ExitPasswordWindow { Owner = System.Windows.Window.GetWindow(this) };
+        if (dlg.ShowDialog() == true)
+            System.Windows.Application.Current.Shutdown();
+    }
 }

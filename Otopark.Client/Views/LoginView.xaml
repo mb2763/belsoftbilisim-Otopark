@@ -35,12 +35,16 @@
                            Source="pack://application:,,,/Assets/logo_left.png"
                            Stretch="Uniform"/>
 
-                    <!-- Sağ Logo -->
+                    <!-- Sağ Logo — ÇİFT TIKLAMA: yönetici şifresi ile programı kapat
+                         (uygulama tam ekran çalıştığı için başlık çubuğu/kapatma butonu yok) -->
                     <Image Grid.Column="1"
                            Height="64"
                            HorizontalAlignment="Right"
                            Source="pack://application:,,,/Assets/kurum_logo.png"
-                           Stretch="Uniform"/>
+                           Stretch="Uniform"
+                           Cursor="Hand"
+                           ToolTip="Programı kapatmak için çift tıklayınız"
+                           MouseLeftButtonDown="KurumLogo_MouseDown"/>
                 </Grid>
 
                 <!-- Başlık -->

@@ -31,22 +31,35 @@ public static class CameraConfigService
         EntryUrl = AppConfig.Configuration["CameraSnapshot:EntrySnapshotUrl"] ?? "";
         ExitUrl = AppConfig.Configuration["CameraSnapshot:ExitSnapshotUrl"] ?? "";
 
+        CameraDiag.Write($"--- Kamera yapilandirmasi: companyId={companyId}, zoneId={zoneId} (API: {ApiBaseUrl})");
+        if (zoneId <= 0)
+            CameraDiag.Error("Bolge (zoneId) 0 geldi -> web'deki kamera tanimi SORGULANAMAZ. Once bolge secip giris yapilmali.");
+
         try
         {
             using var http = new HttpClient { BaseAddress = new Uri(ApiBaseUrl), Timeout = TimeSpan.FromSeconds(10) };
             var zoneApi = new ZoneApiService(http);
             var cams = await zoneApi.GetZoneCamerasAsync(companyId, zoneId);
+            CameraDiag.Write($"Web'den donen kamera sayisi: {cams.Count}");
 
             var entry = cams.FirstOrDefault(c => c.CameraType == 1 && !string.IsNullOrWhiteSpace(c.IpAddress));
             var exit = cams.FirstOrDefault(c => c.CameraType == 2 && !string.IsNullOrWhiteSpace(c.IpAddress));
 
             if (entry != null) EntryUrl = BuildUrl(entry.IpAddress);
             if (exit != null) ExitUrl = BuildUrl(exit.IpAddress);
+
+            if (cams.Count == 0)
+                CameraDiag.Error($"Bu bolge (zoneId={zoneId}) icin web'de kamera TANIMLI DEGIL. " +
+                                 "Web > Kapali Otopark Yonetimi > Kamera Tanimlari'ndan giris/cikis kamerasi ekleyin.");
         }
-        catch
+        catch (Exception ex)
         {
             // API'ye ulasilamazsa appsettings degerleri kalir.
+            CameraDiag.Error("Kamera tanimlari API'den alinamadi: " + ex.Message);
         }
+
+        CameraDiag.Write($"GIRIS kamera URL : {(string.IsNullOrWhiteSpace(EntryUrl) ? "(BOS)" : EntryUrl)}");
+        CameraDiag.Write($"CIKIS kamera URL : {(string.IsNullOrWhiteSpace(ExitUrl) ? "(BOS)" : ExitUrl)}");
     }
 
     /// <summary>
