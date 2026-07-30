@@ -362,6 +362,30 @@ public partial class VehicleParkApiService
             .ToList();
     }
 
+    /// <summary>
+    /// CIKIS ANINDA cagrilir: bu girise ait aktif yikama fisi var mi, ucretsiz sure dolmus mu?
+    /// hasWashReceipt=true + isExpired=false ise otopark ucreti/borcu yikama ile karsilanmis
+    /// sayilir (cikis engellenmez). Hata/eris ilememe durumunda GUVENLI TARAF: hasWashReceipt=false
+    /// doner (yani yikama yoktu gibi davranilir, normal borc kontrolu calisir).
+    /// </summary>
+    public async Task<WashStatusResult> GetWashStatusAsync(long companyId, long vehicleEntryId)
+    {
+        try
+        {
+            var url = $"Wash/GetWashStatus?companyId={companyId}&vehicleEntryId={vehicleEntryId}";
+            using var response = await _http.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return new WashStatusResult();
+            var json = await response.Content.ReadAsStringAsync();
+            var res = JsonSerializer.Deserialize<WashStatusResult>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return res ?? new WashStatusResult();
+        }
+        catch
+        {
+            return new WashStatusResult();
+        }
+    }
+
     /// <summary>Yikama fisi bas. Basariliysa Success=true ve tutar/sure bilgileri doner.</summary>
     public async Task<WashReceiptResult> PrintWashReceiptAsync(long companyId, long currentUserId, long vehicleEntryId, int freeMinutes)
     {
@@ -386,6 +410,16 @@ public partial class VehicleParkApiService
             return new WashReceiptResult { Code = 0, Message = ex.Message };
         }
     }
+}
+
+/// <summary>Wash/GetWashStatus yaniti. Code!=1 ya da network hatasi olursa varsayilan (guvenli) degerler kalir.</summary>
+public class WashStatusResult
+{
+    public int Code { get; set; }
+    public bool HasWashReceipt { get; set; }
+    public bool IsExpired { get; set; }
+    public int RemainingMinutes { get; set; }
+    public decimal Fee { get; set; }
 }
 
 public class SubscriptionCheckResponse

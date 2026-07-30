@@ -704,6 +704,10 @@ namespace Otopark.Client.Views
         /// (OldDebt - VEHICLE_CREDIT'ten gelen, kara liste ile ayni kaynak) varsa bariyer ACILMAZ,
         /// "Borç ödenmeden bariyer açılmaz" uyarisi verilir. Secili arac yoksa (manuel/kamera
         /// tabanli akis) kontrol atlanir - mevcut davranis korunur.
+        ///
+        /// YIKAMA ISTISNASI: secili aracin aktif yikama fisi varsa VE ucretsiz sure DOLMAMISSA,
+        /// borc olsa bile bariyer acilir (otopark ucreti yikama ile karsilanir). Sure DOLMUSSA
+        /// normal borc mesaji yerine "yikama ucretsiz sureniz bitti, kiosktan odeyin" denir.
         /// </summary>
         private async void BarrierExit_Click(object sender, RoutedEventArgs e)
         {
@@ -712,9 +716,36 @@ namespace Otopark.Client.Views
                 var sel = vm.SelectedVehicle;
                 if (sel != null && sel.OldDebt > 0)
                 {
-                    vm.ShowBarrierToast(false,
-                        $"{sel.Plate}: Kapalı Otopark borcu ({sel.OldDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.");
-                    return;
+                    bool washBypass = false;
+                    try
+                    {
+                        var washStatus = await vm.ApiService.GetWashStatusAsync(
+                            Otopark.Core.Session.UserSession.CompanyId, sel.EntryId);
+                        if (washStatus.HasWashReceipt)
+                        {
+                            if (!washStatus.IsExpired)
+                            {
+                                washBypass = true;
+                            }
+                            else
+                            {
+                                vm.ShowBarrierToast(false,
+                                    $"{sel.Plate}: Yıkama için belirlenen ücretsiz süreniz bittiği için park ücreti " +
+                                    $"({sel.OldDebt:0.##} TL) ödemeniz gerekiyor. Lütfen kiosk cihazından ödeme yapınız.");
+                                return;
+                            }
+                        }
+                    }
+                    catch { /* yikama durumu alinamazsa normal borc kontrolune devam edilir */ }
+
+                    if (!washBypass)
+                    {
+                        vm.ShowBarrierToast(false,
+                            $"{sel.Plate}: Kapalı Otopark borcu ({sel.OldDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.");
+                        return;
+                    }
+
+                    vm.ShowBarrierToast(true, $"{sel.Plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.");
                 }
             }
 

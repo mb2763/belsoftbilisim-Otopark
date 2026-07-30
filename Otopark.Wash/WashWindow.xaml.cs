@@ -274,9 +274,11 @@ namespace Otopark.Wash
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountdownBrush)));
         }
 
-        public string WashedText => AlreadyWashed ? "FİŞLİ" : "BEKLİYOR";
+        // YIKANACAK: fis basilmis, arac cikista yikama ile karsilanacak (WASH_RECEIPT'e kalici
+        // kaydedildi - raporlarda kullanilir). Geri sayim bu isaretlemeden sonra da DEVAM eder.
+        public string WashedText => AlreadyWashed ? "YIKANACAK" : "BEKLİYOR";
         public Brush WashedBrush => AlreadyWashed
-            ? (Brush)new BrushConverter().ConvertFrom("#9CA3AF")!
+            ? (Brush)new BrushConverter().ConvertFrom("#2563EB")!   // mavi: yikanacak (dikkat cekici)
             : (Brush)new BrushConverter().ConvertFrom("#5ACF90")!;
     }
 }

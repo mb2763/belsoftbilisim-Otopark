@@ -950,14 +950,45 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 catch { /* borclanma hatasi cikisi bloke etmez */ }
             }
 
-            // 6. Bu bolgeye ait borc varsa cikisi engelle.
-            if (zoneDebt > 0)
+            // 6a. YIKAMA KONTROLU: bu girise ait aktif yikama fisi var mi?
+            //   - Fis var + ucretsiz sure DOLMAMIS  -> otopark ucreti yikama ile karsilanmis sayilir,
+            //     bolge borcu (zoneDebt) yok sayilip cikisa devam edilir.
+            //   - Fis var + ucretsiz sure DOLMUS     -> normal otopark ucreti odenmeden cikis YAPILMAZ;
+            //     mesaj ozel olarak "yikama ucretsiz sureniz bitti, kiosktan odeyin" seklinde verilir.
+            bool washBypass = false;
+            try
+            {
+                var washStatus = await _vehicleApi.GetWashStatusAsync(UserSession.CompanyId, entryId);
+                if (washStatus.HasWashReceipt)
+                {
+                    if (!washStatus.IsExpired)
+                    {
+                        washBypass = true;   // ucretsiz yikama suresi icinde -> borc bypass
+                    }
+                    else if (zoneDebt > 0)
+                    {
+                        ShowToast(
+                            $"{plate}: Yıkama için belirlenen ücretsiz süreniz bittiği için park ücreti " +
+                            $"({zoneDebt:F2} TL) ödemeniz gerekiyor. Lütfen kiosk cihazından ödeme yapınız.",
+                            false);
+                        return;
+                    }
+                }
+            }
+            catch { /* yikama durumu alinamazsa normal borc kontrolune devam edilir */ }
+
+            // 6b. Bu bolgeye ait borc varsa cikisi engelle (yikama ile karsilanmadiysa).
+            if (!washBypass && zoneDebt > 0)
             {
                 var msg = $"{plate} plakali aracin {LoggedZoneName} kapali otopark icin {zoneDebt:F2} TL borcu bulunmakta. Borcu odenmeden cikis yapilamaz.";
                 if (totalDebt > zoneDebt)
                     msg += $" (Tum bolgelerdeki toplam borc: {totalDebt:F2} TL)";
                 ShowToast(msg, false);
                 return;
+            }
+            if (washBypass && zoneDebt > 0)
+            {
+                ShowToast($"{plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.", true);
             }
 
             // 7. Cikis API
