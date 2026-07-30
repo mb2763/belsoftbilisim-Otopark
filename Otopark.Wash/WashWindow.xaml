@@ -22,11 +22,12 @@
             </StackPanel>
         </Grid>
 
-        <!-- Sol: secili arac + fis sonucu | Sag: son 15 arac -->
+        <!-- Sol: secili arac + fis sonucu | Orta: YIKANACAKLAR | Sag: son 15 arac -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="420"/>
+                <ColumnDefinition Width="360"/>
+                <ColumnDefinition Width="380"/>
             </Grid.ColumnDefinitions>
 
             <!-- Sol panel -->
@@ -53,8 +54,42 @@
                 </StackPanel>
             </Border>
 
+            <!-- ORTA PANEL: YIKANACAKLAR -->
+            <!-- Fis basilan (WASH_RECEIPT'e kaydedilen) araclar burada AYRI liste olarak durur.
+                 Geri sayim burada da DEVAM eder; sure bitince kirmizi "Süre doldu" gorunur. -->
+            <Border Grid.Column="1" Background="White" CornerRadius="12" Padding="12" Margin="0,0,12,0"
+                    BorderBrush="#93C5FD" BorderThickness="2">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Margin="4,4,4,10">
+                        <TextBlock Text="🚿 YIKANACAKLAR" FontSize="18" FontWeight="Bold" Foreground="#1D4ED8"/>
+                        <TextBlock x:Name="WashListInfoText" Text="Fişi basılan araçlar" FontSize="12" Foreground="#6B7280"/>
+                    </StackPanel>
+                    <ListBox x:Name="WashList" Grid.Row="1" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#EFF6FF" CornerRadius="8" Padding="12,10" Margin="2,4"
+                                        BorderBrush="#BFDBFE" BorderThickness="1">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Plate}" FontSize="24" FontWeight="Bold" Foreground="#1E3A8A"/>
+                                        <TextBlock Text="{Binding CountdownText}" FontSize="15" FontWeight="Bold"
+                                                   Foreground="{Binding CountdownBrush}"/>
+                                        <TextBlock Text="{Binding EntryTime, StringFormat='Giriş: {0:dd.MM.yyyy HH:mm}'}"
+                                                   FontSize="12" Foreground="#6B7280"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
             <!-- Sag panel: son 15 arac -->
-            <Border Grid.Column="1" Background="White" CornerRadius="12" Padding="12"
+            <Border Grid.Column="2" Background="White" CornerRadius="12" Padding="12"
                     BorderBrush="#E6EAF2" BorderThickness="1">
                 <Grid>
                     <Grid.RowDefinitions>

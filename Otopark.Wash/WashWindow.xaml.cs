@@ -12,6 +12,13 @@ namespace Otopark.Wash
     {
         private readonly VehicleParkApiService _api;
         public ObservableCollection<WashRow> Rows { get; } = new();
+
+        /// <summary>
+        /// YIKANACAKLAR listesi: fisi basilmis (WASH_RECEIPT'e kaydedilmis) araclar.
+        /// Ayri panelde gosterilir; geri sayim burada da devam eder.
+        /// </summary>
+        public ObservableCollection<WashRow> WashRows { get; } = new();
+
         private WashRow? _selected;
 
         /// <summary>Geri sayimi her saniye tazeleyen zamanlayici.</summary>
@@ -24,6 +31,7 @@ namespace Otopark.Wash
             InitializeComponent();
             _api = api;
             EntryList.ItemsSource = Rows;
+            WashList.ItemsSource = WashRows;
             Loaded += async (_, __) =>
             {
                 await LoadAsync();
@@ -45,6 +53,7 @@ namespace Otopark.Wash
             _tick.Tick += async (_, __) =>
             {
                 foreach (var r in Rows) r.RefreshCountdown();
+                foreach (var r in WashRows) r.RefreshCountdown();   // YIKANACAKLAR listesi de geriye saymaya devam eder
 
                 // Sure dolan arac varsa ucret sunucudan gelir; dakikada bir tazele.
                 if ((DateTime.Now - _lastServerRefresh).TotalSeconds >= 60)
@@ -85,6 +94,14 @@ namespace Otopark.Wash
                         Fee = e.Fee
                     });
                 }
+
+                // YIKANACAKLAR listesi: fisi basilmis araclar ayri panelde toplanir.
+                WashRows.Clear();
+                foreach (var r in Rows.Where(r => r.AlreadyWashed).OrderBy(r => r.Remaining))
+                    WashRows.Add(r);
+                WashListInfoText.Text = WashRows.Count == 0
+                    ? "Fişi basılan araç yok"
+                    : $"{WashRows.Count} araç yıkanacak";
 
                 // Otomatik yenilemede secili arac korunur (kullanicinin secimi kaybolmasin).
                 if (onceSecili > 0)
