@@ -43,17 +43,38 @@ namespace Otopark.Client.Helpers
         // Path: o okumanin yapildigi TAM KARE dosyasi (ROI/temp DEGIL - bkz. TryDetectAndSetAsync).
         private readonly List<(string Plate, double Score, DateTime Ts, string? Path)> _buffer = new();
 
+        // Push iki ayri yoldan cagrilabiliyor (FileSystemWatcher ve DetectFromFolder timer'i).
+        // _buffer duz List oldugu icin es zamanli erisim listeyi bozar / LINQ'te
+        // InvalidOperationException atar. Artik tum govde bu kilit altinda.
+        private readonly object _lock = new();
+
         public PlateStabilizer(double minScore, double windowSeconds, int neededHits)
         { _minScore = minScore; _windowSeconds = windowSeconds; _neededHits = neededHits; }
 
         /// <param name="framePath">
         /// Bu okumanin yapildigi TAM KARE dosya yolu. ROI kirpmasindan gelen gecici dosya
         /// ASLA verilmemelidir; aksi halde fotograf olarak kirpilmis goruntu kaydedilir.
+        /// (Yine de bir guvenlik agi olarak %TEMP%\OtoparkRoi altindaki yollar burada elenir.)
         /// </param>
         public StablePlate? Push(string plate, double score, DateTime utcNow, string? framePath = null)
         {
             if (score < _minScore) return null;
 
+            // GUVENLIK AGI: ROI/temp yolu yanlislikla verilirse fotograf kirpik kaydedilmesin.
+            // Yolu dusurmek zarasiz: o okuma yine sayilir, sadece "en net kare" adayi olmaz.
+            if (!string.IsNullOrWhiteSpace(framePath))
+            {
+                try
+                {
+                    var roiKok = Path.Combine(Path.GetTempPath(), "OtoparkRoi");
+                    if (Path.GetFullPath(framePath).StartsWith(roiKok, StringComparison.OrdinalIgnoreCase))
+                        framePath = null;
+                }
+                catch { framePath = null; }   // yol cozulemiyorsa aday sayma
+            }
+
+            lock (_lock)
+            {
             _buffer.Add((plate, score, utcNow, framePath));
             var cutoff = utcNow.AddSeconds(-_windowSeconds);
             _buffer.RemoveAll(x => x.Ts < cutoff);
@@ -107,6 +128,7 @@ namespace Otopark.Client.Helpers
 
             _buffer.Clear();
             return new StablePlate(canonical, avg, enNet.Path, enNet.Score);
+            }   // lock
         }
 
         /// <summary>

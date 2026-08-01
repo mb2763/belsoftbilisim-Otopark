@@ -417,7 +417,17 @@ namespace Otopark.Client.Views
             if (isEntry) { _lastEntryFile = latest.FullName; _lastEntryWriteUtc = latest.LastWriteTimeUtc; }
             else { _lastExitFile = latest.FullName; _lastExitWriteUtc = latest.LastWriteTimeUtc; }
 
-            await TryDetectAndSetAsync(latest.FullName, isEntry, ct);
+            // Watcher yolu (OnNewImageAsync) bu gate'i aliyordu ama timer yolu ALMIYORDU.
+            // Sonuc: ayni stabilizer'a iki thread'den es zamanli Push -> buffer bozulmasi
+            // ve yanlis/null "en net kare" secimi. Artik iki yol da ayni gate'ten geciyor.
+            var gate = isEntry ? _entryGate : _exitGate;
+            if (!await gate.WaitAsync(500, ct)) return;   // mesgulse pas gec, sonraki tick yakalar
+
+            try
+            {
+                await TryDetectAndSetAsync(latest.FullName, isEntry, ct);
+            }
+            finally { gate.Release(); }
         }
 
         private async Task TryDetectAndSetAsync(string imagePath, bool isEntry, CancellationToken ct)
