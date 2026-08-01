@@ -202,10 +202,21 @@ namespace Otopark.Client.Helpers
                 var winnerSource = topGroup.OrderByDescending(c => c.Score).First().Source;
 
                 // Cok aday + TR + il kodu OK -> yuksek skor
-                double winnerFinal = Math.Max(0.90, Math.Min(1.0, maxRawScore + 0.55));
+                // ONCEDEN: Math.Max(0.90, ...) vardi -> lokal motor bir sey dondurduyse skor
+                // HER ZAMAN >= 0.90 oluyordu. Stabilizer 0.90'da tek hit'te kabul ettigi icin
+                // neededHits:2 ayari FIILEN OLUYDU: tek bir karede uydurulan plaka otomatik
+                // girisi aciyordu. Boost'lar korundu, sadece 0.90 tavanina kim gecebilecegi kisitlandi.
+                double winnerFinal = Math.Min(1.0, maxRawScore + 0.55);
                 if (winnerSource == "onnx") winnerFinal = Math.Min(1.0, winnerFinal + 0.05);
                 // Birden fazla aday ayni plakayi soyledi -> ekstra guven
                 if (topGroup.Count() >= 2) winnerFinal = Math.Min(1.0, winnerFinal + 0.03);
+
+                // TEK-HIT KAPISI: 0.90 esigini (yani stabilizer'in tek kareyle kabul kisayolunu)
+                // SADECE guvenilir dedektorden gelen VE en az 2 adayin uzerinde uzlastigi okumalar
+                // gecebilir. Diger her sey 0.89'da tutulur -> 10 sn penceresinde 2 kare dogrulamasi
+                // sart olur. minScore 0.40 oldugu icin okuma KAYBI olmaz, sadece dogrulama eklenir.
+                bool tekHitHakki = winnerSource == "onnx" && topGroup.Count() >= 2;
+                if (!tekHitHakki && winnerFinal >= 0.90) winnerFinal = 0.89;
 
                 Candidate? best = new Candidate(winnerPlate, winnerFinal, winnerSource);
 
@@ -240,6 +251,14 @@ namespace Otopark.Client.Helpers
                 foreach (var box in boxes.Take(5))
                     regions.Add(ExpandAndCrop(src, box, 8));
                 if (regions.Count > 0) return regions;
+
+                // HAYALET OKUMA KAPISI:
+                // Guvenilir dedektor CALISIYOR ve "bu karede plaka YOK" diyorsa, asagidaki
+                // kenar/renk heuristiklerine DUSME. Onceden bos koridor karesinde tabela,
+                // duvar paneli, zemin cizgisi "plaka bolgesi" olarak donuyor, OCR bir metin
+                // uyduruyor ve otomatik giris aciliyordu (kayit var, fotografta arac yok).
+                // Gercek plakalarda kayip olmaz: o durumda ONNX zaten kutu buluyor.
+                return regions;   // bos liste
             }
 
             // 2) Haar cascade

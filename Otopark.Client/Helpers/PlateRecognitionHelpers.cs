@@ -35,11 +35,14 @@ namespace Otopark.Client.Helpers
             var cutoff = utcNow.AddSeconds(-_windowSeconds);
             _buffer.RemoveAll(x => x.Ts < cutoff);
 
-            // Yuksek guvenli sonuc (>= 0.90): TR formati + il kodu zaten format library
-            // tarafindan dogrulandi, ONNX OCR + consensus boost ile elde edilen yuksek skor
-            // demek tek hit'le kabul guvenli (hayalet plaka skor 0.90 ulasmaz cunku
-            // detection threshold 0.65 + TR il kodu filtresi + format library zinciri var).
-            // Hareket halindeki araclar icin kritik - sadece 1-2 frame'de net plaka olabilir.
+            // Yuksek guvenli sonuc (>= 0.90) -> tek hit'te kabul.
+            // Hareket halindeki araclar icin kritik: sadece 1-2 frame'de net plaka olabilir.
+            //
+            // DIKKAT: Bu kisayolun guvenligi TAMAMEN skoru kimin 0.90'a cikarabildigine bagli.
+            // LocalPlateRecognizer eskiden skoru KOSULSUZ 0.90'a zorluyordu (Math.Max(0.90, ...)),
+            // bu yuzden asagidaki 2-hit dogrulamasi fiilen olu kalmis ve bos koridor karesinde
+            // uydurulan plakalar tek karede kabul edilmisti. Artik 0.90'i yalnizca ONNX
+            // dedektorunden gelen VE en az 2 adayin uzlastigi okumalar gecebiliyor.
             if (score >= 0.90)
             {
                 _buffer.Clear();

@@ -58,6 +58,9 @@ namespace Otopark.Client.Views
         // Skor >= 0.90 ise stabilizer tek hit'te kabul (yeni cct_s_v2_global + TR il kodu
         // + format library zinciri sayesinde guvenli). Dusuk skorlu (0.40-0.89) okumalar
         // icin 2-hit gerekli. Pencere 10sn (arac gecisi tipik 3-15sn).
+        /// <summary>Kamera dongusu/watcher'lari yalnizca BIR KEZ baslatmak icin (bkz. Loaded).</summary>
+        private bool _started;
+
         private readonly PlateStabilizer _entryStabilizer = new(minScore: 0.40, windowSeconds: 10.0, neededHits: 2);
         private readonly PlateStabilizer _exitStabilizer = new(minScore: 0.40, windowSeconds: 10.0, neededHits: 2);
         // Suppress: ayni/benzer plaka 120sn boyunca tekrar gonderilmez (Levenshtein-tolerant).
@@ -104,8 +107,11 @@ namespace Otopark.Client.Views
                 _recognizer = null;
             }
 
-            Start();
-            Loaded += (_, __) => Start();
+            // NOT: Onceden hem burada hem Loaded'da Start() cagriliyordu. Sonuc: AYNI klasore
+            // iki MJPEG dongusu (2 kat kare/sn) ve CreateWatcher onceki watcher'i dispose etmeden
+            // uzerine yaziyordu -> oksuz FileSystemWatcher'lar olay firlatmaya devam ediyordu.
+            // Artik tek sefer baslar (Loaded birden fazla kez tetiklenebilir, bayrakla korunur).
+            Loaded += (_, __) => { if (!_started) { _started = true; Start(); } };
             Unloaded += (_, __) => Stop();
 
             DataContextChanged += (_, __) =>
