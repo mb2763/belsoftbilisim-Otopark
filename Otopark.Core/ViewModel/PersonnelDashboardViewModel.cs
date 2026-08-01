@@ -458,7 +458,8 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             bool isSubscriber = false;
             try
             {
-                var capSubResp = await _vehicleApi.CheckSubscriptionAsync(plate, UserSession.CompanyId);
+                // BolgeId gonderilir: kapali otoparkta SADECE kapali otopark aboneligi gecerli
+                var capSubResp = await _vehicleApi.CheckSubscriptionAsync(plate, UserSession.CompanyId, BolgeId);
                 isSubscriber = capSubResp != null && capSubResp.IsSubscriber;
             }
             catch
@@ -570,7 +571,8 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // A (abone, yesil) ya da N (normal, sari) badge'i + abonelik turu
             try
             {
-                var subResp = await _vehicleApi.CheckSubscriptionAsync(row.Plate, UserSession.CompanyId);
+                // BolgeId gonderilir: yol kenari aboneligi kapali otoparkta "A" (abone) gosterilmez
+                var subResp = await _vehicleApi.CheckSubscriptionAsync(row.Plate, UserSession.CompanyId, BolgeId);
                 if (subResp != null && subResp.IsSubscriber)
                 {
                     row.IsSubscriber = true;

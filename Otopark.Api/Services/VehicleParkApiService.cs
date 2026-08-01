@@ -216,11 +216,16 @@ public partial class VehicleParkApiService
     /// Plakanin AKTIF aboneligi var mi kontrol eder.
     /// Kapali Otopark Desktop arac girisinde A (yesil) / N (sari) badge icin.
     /// </summary>
-    public async Task<SubscriptionCheckResponse> CheckSubscriptionAsync(string plate, long companyId)
+    /// <param name="zoneId">
+    /// Giris bolgesi. Bolge KAPALI OTOPARK (ZoneClassId=424) ise sunucu, aracin aboneliginin de
+    /// kapali otoparka ait olmasini sart kosar; yol kenari aboneligi "abone" sayilmaz.
+    /// 0 gonderilirse bolge kontrolu uygulanmaz (eski davranis).
+    /// </param>
+    public async Task<SubscriptionCheckResponse> CheckSubscriptionAsync(string plate, long companyId, long zoneId = 0)
     {
         try
         {
-            var url = $"VehiclePark/CheckSubscription?plate={Uri.EscapeDataString(plate)}&companyId={companyId}";
+            var url = $"VehiclePark/CheckSubscription?plate={Uri.EscapeDataString(plate)}&companyId={companyId}&zoneId={zoneId}";
             using var response = await _http.GetAsync(url);
             if (!response.IsSuccessStatusCode)
                 return new SubscriptionCheckResponse { IsSubscriber = false };

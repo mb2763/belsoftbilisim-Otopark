@@ -661,7 +661,11 @@ namespace Otopark.Client.Views
             string imgPath = isEntry ? row.EntryPlateImagePath : row.ExitPlateImagePath;
 
             // Gorsel yoksa da plaka duzeltilebilsin (fotograf paneli bos kalir).
-            if (!string.IsNullOrWhiteSpace(imgPath) && !File.Exists(imgPath))
+            // http(s) adresleri File.Exists ile kontrol edilemez -> onlari eleme.
+            bool imgIsUrl = !string.IsNullOrWhiteSpace(imgPath) &&
+                            (imgPath.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase) ||
+                             imgPath.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(imgPath) && !imgIsUrl && !File.Exists(imgPath))
                 imgPath = "";
 
             string? newPlate = null;
