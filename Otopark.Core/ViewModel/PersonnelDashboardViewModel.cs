@@ -806,8 +806,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         {
             var resp = await _vehicleApi.UpdateEntryPlateAsync(row.EntryId, newPlate, UserSession.CompanyId, UserSession.UserId);
 
+            // KRITIK: resp == null (HTTP hatasi ya da deserialize basarisiz) durumu ONCEDEN "hata yok"
+            // sayiliyordu -> kullaniciya yesil "Plaka duzeltildi" gosteriliyor ama DB'de hicbir sey
+            // degismiyordu. Program yeniden acilinca eski plaka geri geliyordu.
+            if (resp == null)
+            {
+                ShowToast("Guncelleme DOGRULANAMADI (sunucudan yanit alinamadi). Plaka degistirilmedi.", false);
+                return false;
+            }
+
             // Yeni plaka kayitli degilse backend hata doner -> popup ile kayit yaptiralim
-            if (resp?.Errors != null && resp.Errors.Count > 0)
+            if (resp.Errors != null && resp.Errors.Count > 0)
             {
                 var msg = string.Join(", ", resp.Errors.Where(e => !string.IsNullOrEmpty(e.Message)).Select(e => e.Message));
                 var notRegistered = msg.Contains("kayıtlı değil", StringComparison.OrdinalIgnoreCase)
@@ -820,7 +829,12 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
                     // Arac kaydedildi, tekrar dene
                     resp = await _vehicleApi.UpdateEntryPlateAsync(row.EntryId, newPlate, UserSession.CompanyId, UserSession.UserId);
-                    if (resp?.Errors != null && resp.Errors.Count > 0)
+                    if (resp == null)
+                    {
+                        ShowToast("Guncelleme DOGRULANAMADI (sunucudan yanit alinamadi). Plaka degistirilmedi.", false);
+                        return false;
+                    }
+                    if (resp.Errors != null && resp.Errors.Count > 0)
                     {
                         ShowToast("Guncelleme basarisiz: " + string.Join(", ", resp.Errors.Select(e => e.Message)), false);
                         return false;
@@ -835,6 +849,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             row.Plate = newPlate;
             ShowToast($"Plaka duzeltildi: {newPlate}", true);
+
+            // Sunucudan yeniden oku: ekranda gorulen plaka artik DB'nin gercek hali olsun.
+            // (Eskiden sadece bellekteki satir degistiriliyordu; yazma basarisiz olsa bile
+            //  ekranda dogru gorunuyor, ilk yenilemede eski plaka geri geliyordu.)
+            try { await LoadParkDataAsync(); } catch { /* yenileme basarisizsa toast zaten verildi */ }
             return true;
         }
         catch (Exception ex)

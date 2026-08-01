@@ -231,6 +231,7 @@
                                   SelectedItem="{Binding SelectedVehicle, Mode=TwoWay}"
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
+                                  IsReadOnly="True"
                                   HeadersVisibility="Column"
                                   RowHeight="42"
                                   ColumnHeaderHeight="28"
