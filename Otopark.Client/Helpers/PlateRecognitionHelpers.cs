@@ -14,7 +14,25 @@ namespace Otopark.Client.Helpers
     {
         public string Plate { get; }
         public double Score { get; }
-        public StablePlate(string plate, double score) { Plate = plate; Score = score; }
+
+        /// <summary>
+        /// EN NET KARE: bu plakayi olusturan okumalar icinde EN YUKSEK SKORLU karenin dosya yolu.
+        /// Fotograf olarak bu kare kaydedilir; boylece DB'ye "OCR'in ilk takildigi" kare degil,
+        /// plakanin en iyi okundugu kare gider. Tek-hit yolunda tetikleyen karenin kendisidir.
+        /// null olabilir (yol verilmediyse) -> cagiran taraf tetikleyen kareye geri doner.
+        /// </summary>
+        public string? BestFramePath { get; }
+
+        /// <summary>En net karenin skoru (olcum/log icin; BestFramePath null ise Score ile ayni).</summary>
+        public double BestFrameScore { get; }
+
+        public StablePlate(string plate, double score, string? bestFramePath = null, double bestFrameScore = 0)
+        {
+            Plate = plate;
+            Score = score;
+            BestFramePath = bestFramePath;
+            BestFrameScore = bestFrameScore > 0 ? bestFrameScore : score;
+        }
     }
 
     internal sealed class PlateStabilizer
@@ -22,16 +40,21 @@ namespace Otopark.Client.Helpers
         private readonly double _minScore;
         private readonly double _windowSeconds;
         private readonly int _neededHits;
-        private readonly List<(string Plate, double Score, DateTime Ts)> _buffer = new();
+        // Path: o okumanin yapildigi TAM KARE dosyasi (ROI/temp DEGIL - bkz. TryDetectAndSetAsync).
+        private readonly List<(string Plate, double Score, DateTime Ts, string? Path)> _buffer = new();
 
         public PlateStabilizer(double minScore, double windowSeconds, int neededHits)
         { _minScore = minScore; _windowSeconds = windowSeconds; _neededHits = neededHits; }
 
-        public StablePlate? Push(string plate, double score, DateTime utcNow)
+        /// <param name="framePath">
+        /// Bu okumanin yapildigi TAM KARE dosya yolu. ROI kirpmasindan gelen gecici dosya
+        /// ASLA verilmemelidir; aksi halde fotograf olarak kirpilmis goruntu kaydedilir.
+        /// </param>
+        public StablePlate? Push(string plate, double score, DateTime utcNow, string? framePath = null)
         {
             if (score < _minScore) return null;
 
-            _buffer.Add((plate, score, utcNow));
+            _buffer.Add((plate, score, utcNow, framePath));
             var cutoff = utcNow.AddSeconds(-_windowSeconds);
             _buffer.RemoveAll(x => x.Ts < cutoff);
 
@@ -46,7 +69,8 @@ namespace Otopark.Client.Helpers
             if (score >= 0.90)
             {
                 _buffer.Clear();
-                return new StablePlate(plate, score);
+                // Tek kare var -> en net kare zaten tetikleyen karedir (davranis degismez).
+                return new StablePlate(plate, score, framePath, score);
             }
 
             // Bu plakaya yakin (Levenshtein <= 2) tum okumalari ayni "grup" say.
@@ -69,8 +93,20 @@ namespace Otopark.Client.Helpers
                 .First().Key;
 
             var avg = matches.Average(x => x.Score);
+
+            // EN NET KARE SECIMI:
+            // Ayni plaka grubunun (Levenshtein<=2) kareleri arasindan EN YUKSEK SKORLU olani sec.
+            // Once tam olarak canonical plakayi okuyan kareler denenir; yoksa tum gruba bakilir.
+            // Tum adaylar AYNI plaka grubundan geldigi icin "yanlis aracin karesi" secilemez.
+            var frameAdaylari = matches.Where(x => !string.IsNullOrEmpty(x.Path)).ToList();
+            var canonicalAdaylari = frameAdaylari.Where(x => x.Plate == canonical).ToList();
+            var enNet = (canonicalAdaylari.Count > 0 ? canonicalAdaylari : frameAdaylari)
+                .OrderByDescending(x => x.Score)
+                .Select(x => (Path: x.Path, Score: x.Score))
+                .FirstOrDefault();
+
             _buffer.Clear();
-            return new StablePlate(canonical, avg);
+            return new StablePlate(canonical, avg, enNet.Path, enNet.Score);
         }
 
         /// <summary>

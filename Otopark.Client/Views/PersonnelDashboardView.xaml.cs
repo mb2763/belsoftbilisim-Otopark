@@ -476,7 +476,9 @@ namespace Otopark.Client.Views
                 }
 
                 var stabilizer = isEntry ? _entryStabilizer : _exitStabilizer;
-                var stable = stabilizer.Push(plate, score, DateTime.UtcNow);
+                // imagePath = TAM KARE. (ROI kirpmasindan gelen 'cropped' gecici dosyasi
+                // BILEREK verilmez; verilirse fotograf olarak kirpilmis goruntu kaydedilir.)
+                var stable = stabilizer.Push(plate, score, DateTime.UtcNow, imagePath);
                 if (stable == null)
                 {
                     Log($"[{side}] Bekleme (stabilizer): '{plate}' skor={score:F2}");
@@ -491,7 +493,33 @@ namespace Otopark.Client.Views
                 }
 
                 var captureFolder = isEntry ? EntryCaptureFolder : ExitCaptureFolder;
-                var savedSnapshots = SavePlateSnapshots(stable.Plate, captureFolder, imagePath, isEntry);
+
+                // ===== EN NET KARE =====
+                // Fotograf olarak, plakanin EN IYI okundugu kareyi kullan (stabilizer secer).
+                // Dosya bu arada silinmisse tetikleyen kareye geri don.
+                string fotoKare = imagePath;
+                if (!string.IsNullOrWhiteSpace(stable.BestFramePath) &&
+                    !string.Equals(stable.BestFramePath, imagePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(stable.BestFramePath))
+                    {
+                        Log($"[{side}] EN NET KARE secildi: {Path.GetFileName(imagePath)} (skor={score:F2}) " +
+                            $"-> {Path.GetFileName(stable.BestFramePath)} (skor={stable.BestFrameScore:F2}, " +
+                            $"fark=+{(stable.BestFrameScore - score):F2})");
+                        fotoKare = stable.BestFramePath!;
+                    }
+                    else
+                    {
+                        Log($"[{side}] En net kare dosyasi bulunamadi ({Path.GetFileName(stable.BestFramePath)}), " +
+                            $"tetikleyen kare kullanilacak.");
+                    }
+                }
+                else
+                {
+                    Log($"[{side}] Foto = tetikleyen kare (skor={score:F2}); daha iyi kare yok.");
+                }
+
+                var savedSnapshots = SavePlateSnapshots(stable.Plate, captureFolder, fotoKare, isEntry);
 
                 // Default: AUTO-APPROVE her zaman acik. Sadece "false" yazilirsa kapanir.
                 bool autoApprove = isEntry
