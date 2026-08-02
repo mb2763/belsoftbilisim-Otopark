@@ -202,6 +202,23 @@ namespace Otopark.Client.Views
                         return result;
                     };
 
+                    // IPTAL NEDENI penceresi (web Plaka Revizyon ekranindaki ile ayni mantik).
+                    // Cikisi yapilmis kayitlarda ek uyari gosterilir.
+                    vm.OnCancelReasonRequired += async (plate, hasExit) =>
+                    {
+                        string? reason = null;
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            var win = new CancelReasonWindow(plate, hasExit)
+                            {
+                                Owner = Window.GetWindow(this)
+                            };
+                            if (win.ShowDialog() == true)
+                                reason = win.Reason;
+                        });
+                        return reason;
+                    };
+
                     vm.OnCorrectPlateRequested += async (row) =>
                     {
                         string? newPlate = null;

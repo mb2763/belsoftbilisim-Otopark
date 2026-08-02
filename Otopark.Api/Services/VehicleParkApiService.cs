@@ -172,6 +172,41 @@ public partial class VehicleParkApiService
     /// <summary>
     /// Bir arac giris kaydini siler (iptal). Backend yumusak silme yapar (IsDelete=true).
     /// </summary>
+    /// <summary>
+    /// TAM IPTAL — web Plaka Revizyon ekraniyla AYNI ucu kullanir.
+    /// Cikisi yoksa: giris + giris borcu (VEHICLE_EXIT_ID=0) iptal edilir.
+    /// Cikisi varsa: giris + cikis + cikisa bagli borclar iptal edilir.
+    /// Her iki durumda VEHICLE_DEFINITION.CREDIT iptal edilen borc kadar azalir,
+    /// ACIKLAMA alanlarina "IPTAL - neden" yazilir, revizyon logu dusulur.
+    /// </summary>
+    public async Task<DeleteEntryResponse?> CancelEntryAsync(long entryId, long companyId, long currentUserId, string reason)
+    {
+        var url = $"VehiclePark/CancelVehicleParkEntry?id={entryId}&companyId={companyId}"
+                + $"&currentUserId={currentUserId}&reason={Uri.EscapeDataString(reason ?? "")}";
+        using var response = await _http.PostAsync(url, null);
+        var json = await response.Content.ReadAsStringAsync();
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+        if (!response.IsSuccessStatusCode)
+        {
+            try
+            {
+                var err = JsonSerializer.Deserialize<DeleteEntryResponse>(json, options);
+                if (err != null) return err;
+            }
+            catch { }
+
+            return new DeleteEntryResponse
+            {
+                Errors = new List<ErrorMessageObject>
+                {
+                    new() { Message = $"{(int)response.StatusCode} - {json}" }
+                }
+            };
+        }
+        return JsonSerializer.Deserialize<DeleteEntryResponse>(json, options);
+    }
+
     public async Task<DeleteEntryResponse?> DeleteEntryAsync(long entryId, long companyId, long currentUserId)
     {
         var url = $"VehiclePark/DeleteVehicleParkEntry?id={entryId}&companyId={companyId}&currentUserId={currentUserId}";

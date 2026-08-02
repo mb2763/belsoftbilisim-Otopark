@@ -755,25 +755,46 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     // ===== IPTAL =====
 
+    /// <summary>
+    /// Iptal nedeni ister (View bir giris penceresi acar). null/bos donerse islem iptal edilir.
+    /// </summary>
+    public event Func<string, bool, Task<string?>>? OnCancelReasonRequired;
+
     [RelayCommand]
     private async Task CancelEntryAsync(VehicleRow? row)
     {
         if (row == null) return;
         if (row.EntryId <= 0) { ShowToast("Giris Id bulunamadi.", false); return; }
-        if (row.ExitDateTime != null) { ShowToast("Cikis yapilmis kayitlar iptal edilemez.", false); return; }
         if (row.ParkType == "Iptal") { ShowToast("Bu kayit zaten iptal edilmis.", false); return; }
 
-        var ok = OnConfirmRequired != null
-            ? await OnConfirmRequired.Invoke(
-                "Iptal Onayi",
-                $"{row.Plate} plakali aracin giris kaydi iptal edilecek. Onayliyor musunuz?")
-            : true;
-        if (!ok) return;
+        // CIKISI YAPILMIS kayitlar da iptal edilebilir (web Plaka Revizyon ile ayni davranis).
+        bool cikisVar = row.ExitDateTime != null;
+
+        // Iptal nedeni ZORUNLU: sunucu tarafi da bos nedeni reddediyor.
+        string? reason = OnCancelReasonRequired != null
+            ? await OnCancelReasonRequired.Invoke(row.Plate ?? "", cikisVar)
+            : null;
+
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            // Neden penceresi yoksa (eski View) ya da kullanici vazgectiyse.
+            if (OnCancelReasonRequired == null)
+                ShowToast("Iptal nedeni alinamadi.", false);
+            return;
+        }
 
         try
         {
-            var resp = await _vehicleApi.DeleteEntryAsync(row.EntryId, UserSession.CompanyId, UserSession.UserId);
-            if (resp?.Errors != null && resp.Errors.Count > 0)
+            // TAM IPTAL ucu: giris + (varsa) cikis + borclar + CREDIT + ACIKLAMA
+            var resp = await _vehicleApi.CancelEntryAsync(
+                row.EntryId, UserSession.CompanyId, UserSession.UserId, reason.Trim());
+
+            if (resp == null)
+            {
+                ShowToast("Iptal DOGRULANAMADI (sunucudan yanit alinamadi).", false);
+                return;
+            }
+            if (resp.Errors != null && resp.Errors.Count > 0)
             {
                 var msg = string.Join(", ", resp.Errors.Where(e => !string.IsNullOrEmpty(e.Message)).Select(e => e.Message));
                 ShowToast(string.IsNullOrWhiteSpace(msg) ? "Iptal basarisiz." : msg, false);
@@ -783,7 +804,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             row.ParkType = "Iptal";
             UpdateParkCounts();
             ApplyFiltersInternal();
-            ShowToast($"{row.Plate} giris kaydi iptal edildi.", true);
+            ShowToast($"{row.Plate} kaydi iptal edildi" + (cikisVar ? " (giris + cikis + borc)." : "."), true);
+
+            // Sunucudan yeniden oku: ekran DB'nin gercek halini gostersin.
+            try { await LoadParkDataAsync(); } catch { }
         }
         catch (Exception ex)
         {
