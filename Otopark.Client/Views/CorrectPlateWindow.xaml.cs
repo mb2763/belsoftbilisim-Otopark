@@ -13,6 +13,17 @@ public partial class CorrectPlateWindow : Window
     public CorrectPlateWindow(string oldPlate, string? imagePath = null)
     {
         InitializeComponent();
+
+        // Pencere ekrandan TASMASIN: dusuk cozunurlukte Kaydet/Kapat butonlari
+        // ekranin altinda kalip gorunmez oluyordu. Yukseklik calisma alanina gore sinirlanir,
+        // fotograf da (yildiz satir) kalan alana gore kuculur.
+        double calismaY = SystemParameters.WorkArea.Height;
+        double calismaX = SystemParameters.WorkArea.Width;
+        MaxHeight = calismaY;
+        MaxWidth = calismaX;
+        Height = System.Math.Min(880, calismaY - 40);
+        if (Width > calismaX - 40) Width = calismaX - 40;
+
         TxtOldPlate.Text = oldPlate ?? "";
         TxtNewPlate.Text = oldPlate ?? "";
         TxtNewPlate.Focus();
@@ -35,8 +46,15 @@ public partial class CorrectPlateWindow : Window
                 bmp.EndInit();
                 ImgPlate.Source = bmp;
                 PhotoPanel.Visibility = Visibility.Visible;
+                ZoomBar.Visibility = Visibility.Visible;
             }
             catch { /* gorsel yuklenemezse panel gizli kalir */ }
+        }
+
+        // Fotograf yoksa pencereyi gereksiz uzun tutma
+        if (PhotoPanel.Visibility != Visibility.Visible)
+        {
+            SizeToContent = SizeToContent.Height;
         }
     }
 
