@@ -1194,20 +1194,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// CIKIS BARIYERI BORC KONTROLU (manuel bariyer butonu icin).
+    /// MANUEL CIKIS BARIYERI — personel kontrolunde acilir.
     ///
-    /// Onceden buton yalnizca satirdaki <c>OldDebt</c> alanina bakiyordu; o alan
-    /// VEW_VEHICLE_PARK.Balance'tan geliyor ve GERCEK borc (VEHICLE_CREDIT) DEGIL.
-    /// Bu yuzden borcu olan bir arac icin bile bariyer acilabiliyordu.
-    /// Artik otomatik cikis akisiyla AYNI otoriter kaynak kullanilir: plakadan araca,
-    /// aractan VEHICLE_CREDIT kayitlarina. Yikama bypass'i da ayni sekilde uygulanir.
+    /// Amac: kuyruk olustugunda personel bariyeri acabilsin AMA arac BEDAVA CIKMASIN.
+    /// Borclu arac icin personele onay sorulur; onaylanirsa:
+    ///   1) borc kayitli degilse park ucreti hesaplanip VEHICLE_CREDIT olarak YAZILIR
+    ///   2) cikis kaydi islenir (arac "hala iceride" kalmasin)
+    ///   3) bariyer acilir — borc ACIK kalir, arac bir sonraki gelisinde borclu gorunur
     ///
-    /// Doner: (bariyerAcilabilir, mesaj). Mesaj bos degilse kullaniciya gosterilir.
-    /// Emin olunamayan durumda GUVENLI taraf secilir (acilmaz).
+    /// Borc kaynagi otomatik cikis akisiyla AYNI: plaka -> arac -> VEHICLE_CREDIT.
+    /// (Onceden satirdaki OldDebt kullaniliyordu; o alan VEW_VEHICLE_PARK.Balance'tan
+    ///  gelir ve GERCEK borc degildir.)
+    ///
+    /// Doner: (bariyerAcilsin, mesaj, mesajBasariliMi)
     /// </summary>
-    public async Task<(bool acilabilir, string mesaj, bool basarili)> CikisBariyeriIzinAsync(VehicleRow? row)
+    public async Task<(bool acilsin, string mesaj, bool basarili)> CikisBariyeriManuelAsync(VehicleRow? row)
     {
-        // Satir secili degilse eski davranis: serbest ac (operator elle kontrol ediyor)
+        // Satir secili degilse personel serbest acar (elle kontrol)
         if (row == null || string.IsNullOrWhiteSpace(row.Plate))
             return (true, "", true);
 
@@ -1218,32 +1221,123 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             if (vehicle == null || vehicle.Id == 0)
                 return (true, "", true);   // arac kaydi yoksa borc da yoktur
 
-            var (zoneDebt, totalDebt) = await GetVehicleDebtsAsync(vehicle.Id);
-            if (zoneDebt <= 0)
-                return (true, "", true);
+            var (zoneDebt, _) = await GetVehicleDebtsAsync(vehicle.Id);
 
-            // Yikama fisi varsa ve ucretsiz sure DOLMAMISSA borc bypass edilir
+            // Yikama fisi + ucretsiz sure DOLMAMIS -> ucret yikama ile karsilanmis, serbest cikis
             try
             {
                 var washStatus = await _vehicleApi.GetWashStatusAsync(UserSession.CompanyId, row.EntryId);
                 if (washStatus.HasWashReceipt && !washStatus.IsExpired)
-                    return (true, $"{row.Plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.", true);
-
-                if (washStatus.HasWashReceipt && washStatus.IsExpired)
-                    return (false,
-                        $"{row.Plate}: Yıkama için belirlenen ücretsiz süreniz bittiği için park ücreti " +
-                        $"({zoneDebt:0.##} TL) ödemeniz gerekiyor. Lütfen kiosk cihazından ödeme yapınız.", false);
+                    return (true, $"{row.Plate}: Otopark ücreti yıkama ile karşılandı.", true);
             }
-            catch { /* yikama durumu alinamazsa normal borc kurali uygulanir */ }
+            catch { /* yikama durumu alinamazsa normal akis */ }
 
-            var msg = $"{row.Plate}: Kapalı Otopark borcu ({zoneDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.";
-            if (totalDebt > zoneDebt) msg += $" (Tüm bölgeler toplamı: {totalDebt:0.##} TL)";
-            return (false, msg, false);
+            // Kayitli borc yoksa, o ana kadar birikmis park ucretini hesapla
+            decimal borc = zoneDebt;
+            decimal yazilacakUcret = 0m;
+            if (borc <= 0 && row.EntryId > 0 && row.ExitDateTime == null)
+            {
+                try
+                {
+                    yazilacakUcret = (decimal)await _vehicleApi.GetParkPriceAsync(row.EntryId);
+                    if (yazilacakUcret > 0) borc = yazilacakUcret;
+                }
+                catch { /* hesaplanamazsa borc 0 kabul edilir, asagida serbest gecer */ }
+            }
+
+            // Borc yoksa normal serbest cikis
+            if (borc <= 0)
+                return (true, "", true);
+
+            // ---- BORCLU ARAC: personele onay sor ----
+            bool onay = OnConfirmRequired != null
+                ? await OnConfirmRequired.Invoke(
+                    "Borclu Arac - Bariyer Acilsin mi?",
+                    $"{row.Plate} plakali aracin {borc:0.##} TL borcu var.\n\n" +
+                    "Bariyeri acarsaniz arac BORCLANDIRILARAK cikis yapacak:\n" +
+                    "  - Borc kayitli kalacak (silinmez)\n" +
+                    "  - Cikis kaydi islenecek\n" +
+                    "  - Arac bir sonraki gelisinde BORCLU gorunecek\n\n" +
+                    "Kuyruk nedeniyle cikarmak istiyor musunuz?")
+                : true;
+
+            if (!onay)
+                return (false, $"{row.Plate}: Bariyer acilmadi. Borc {borc:0.##} TL.", false);
+
+            // 1) Borc kayitli degilse YAZ (arac bedava cikmasin)
+            if (yazilacakUcret > 0)
+            {
+                try
+                {
+                    var borcResp = await _vehicleApi.AddVehicleCreditAsync(new AddVehicleCreditRequest
+                    {
+                        CurrentUserId = UserSession.UserId,
+                        VehicleDefinitionId = vehicle.Id,
+                        DebtAmount = yazilacakUcret.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        PaidAmount = "0",
+                        Description = $"Kuyruk nedeniyle borclandirilarak cikis - manuel bariyer ({LoggedZoneName})",
+                        CompanyId = UserSession.CompanyId,
+                        ZoneId = BolgeId,
+                        VehicleExitId = 0
+                    });
+                    if (borcResp?.Errors != null && borcResp.Errors.Count > 0)
+                    {
+                        var bMsg = string.Join(", ", borcResp.Errors
+                            .Where(x => !string.IsNullOrEmpty(x.Message)).Select(x => x.Message));
+                        // Borc yazilamadiysa bariyeri ACMA -> bedava cikis olmasin
+                        return (false, $"{row.Plate}: Borc kaydi olusturulamadi ({bMsg}). Bariyer acilmadi.", false);
+                    }
+                }
+                catch (Exception exB)
+                {
+                    return (false, $"{row.Plate}: Borc kaydi olusturulamadi ({exB.Message}). Bariyer acilmadi.", false);
+                }
+            }
+
+            // 2) Cikis kaydini isle (arac "hala iceride" kalmasin). Borc ACIK kalir.
+            if (row.EntryId > 0 && row.ExitDateTime == null)
+            {
+                try
+                {
+                    await _vehicleApi.AddExitAsync(new VehicleParkExitRequest
+                    {
+                        CurrentUserId = UserSession.UserId,
+                        VehicleEntryId = row.EntryId,
+                        PayingUserId = UserSession.UserId,
+                        ExitUserId = UserSession.UserId,
+                        ExitZoneId = BolgeId,
+                        ExitTimeStamp = DateTime.Now,
+                        CalculatedFee = "0",
+                        PayableFee = "0",
+                        MembershipDiscount = "0",
+                        CompanyId = UserSession.CompanyId,
+                        Payment = new PaymentModel
+                        {
+                            CurrentUserId = UserSession.UserId,
+                            ReceiptNo = 0,
+                            PaymentTypeId = 1,
+                            AmountCash = "0",
+                            PaymentTime = DateTime.Now,
+                            CompanyId = UserSession.CompanyId
+                        }
+                    });
+
+                    row.ExitDateTime = DateTime.Now;
+                    row.ParkType = "Cikis";
+                    UpdateParkCounts();
+                    ApplyFiltersInternal();
+                }
+                catch { /* cikis islenemezse bariyer yine acilir; borc zaten yazildi */ }
+            }
+
+            try { await LoadParkDataAsync(); } catch { }
+
+            return (true, $"{row.Plate}: {borc:0.##} TL BORCLANDIRILARAK cikis yapildi. Borc acik kaldi.", true);
         }
         catch (Exception ex)
         {
-            // Borc dogrulanamadi -> GUVENLI taraf: acma
-            return (false, $"{row.Plate}: Borç durumu doğrulanamadı ({ex.Message}). Bariyer açılmadı.", false);
+            // Durum dogrulanamadi -> personel karar versin, bariyeri engelleme
+            return (true, $"{row.Plate}: Borc durumu dogrulanamadi ({ex.Message}). Bariyer personel onayiyla aciliyor.", false);
         }
     }
 

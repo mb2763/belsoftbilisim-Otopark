@@ -778,13 +778,13 @@ namespace Otopark.Client.Views
         {
             if (DataContext is PersonnelDashboardViewModel vm)
             {
-                // BORC KONTROLU: artik satirdaki OldDebt (=Balance, gercek borc DEGIL) yerine
-                // otomatik cikis akisiyla AYNI otoriter kaynak kullaniliyor -> VEHICLE_CREDIT.
-                // Borc varsa (ve yikama ile karsilanmadiysa) bariyer ACILMAZ.
-                var izin = await vm.CikisBariyeriIzinAsync(vm.SelectedVehicle);
+                // MANUEL BARIYER: personel kontrolunde acilir. Borclu araclarda onay sorulur;
+                // onaylanirsa arac BORCLANDIRILARAK cikarilir (borc yazilir + cikis islenir),
+                // yani bedava cikis olmaz. Borc kaynagi: VEHICLE_CREDIT (satirdaki OldDebt degil).
+                var izin = await vm.CikisBariyeriManuelAsync(vm.SelectedVehicle);
                 if (!string.IsNullOrEmpty(izin.mesaj))
                     vm.ShowBarrierToast(izin.basarili, izin.mesaj);
-                if (!izin.acilabilir) return;
+                if (!izin.acilsin) return;
             }
 
             var result = await Services.BarrierService.OpenExitGateAsync();
