@@ -971,6 +971,56 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 ShowToast($"{plate} icin giris kaydi yok, 15 dk oncesine otomatik giris olusturuluyor.", true);
                 entryId = await CreateAutoBackdatedEntryAsync(plate, vehicle);
                 if (entryId == 0) { ShowToast("Otomatik giris olusturulamadi.", false); return; }
+
+                // 3b. GIRISI OLMAYAN ARAC -> ONCE BORCLANDIR, BARIYERI ACMA.
+                // Onceden bu yolda hicbir borc olusmuyordu: adim 4 yalnizca MEVCUT borclari
+                // okudugu icin zoneDebt=0 cikiyor, adim 6b'deki kapi aciliyor ve adim 7 ucreti
+                // "0" gonderiyordu (sunucu ucreti KENDI hesaplamiyor) -> arac BEDAVA cikiyordu.
+                // Artik ucret hesaplanip VEHICLE_CREDIT yaziliyor ve cikis DURDURULUYOR;
+                // surucu kiosktan odeyip tekrar geldiginde borc kapali olacagi icin cikabilir.
+                try
+                {
+                    decimal ucret = (decimal)await _vehicleApi.GetParkPriceAsync(entryId);
+
+                    if (ucret > 0)
+                    {
+                        var borcResp = await _vehicleApi.AddVehicleCreditAsync(new AddVehicleCreditRequest
+                        {
+                            CurrentUserId = UserSession.UserId,
+                            VehicleDefinitionId = vehicle.Id,
+                            DebtAmount = ucret.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            PaidAmount = "0",
+                            Description = $"Park girisi bulunmayan arac - cikista olusturuldu ({LoggedZoneName})",
+                            CompanyId = UserSession.CompanyId,
+                            ZoneId = BolgeId,
+                            VehicleExitId = 0
+                        });
+
+                        if (borcResp?.Errors != null && borcResp.Errors.Count > 0)
+                        {
+                            var bMsg = string.Join(", ", borcResp.Errors
+                                .Where(x => !string.IsNullOrEmpty(x.Message)).Select(x => x.Message));
+                            // Borc yazilamadiysa da BEDAVA CIKISA IZIN VERME (fail-closed).
+                            ShowToast($"{plate}: Borc kaydi olusturulamadi ({bMsg}). Guvenlik geregi cikis yapilmadi.", false);
+                            return;
+                        }
+
+                        ShowToast(
+                            $"{plate}: Park girisi bulunmadigi icin {ucret:F2} TL borc olusturuldu. " +
+                            $"Borc odenmeden cikis bariyeri ACILMAZ - lutfen kiosk cihazindan odeme yapiniz.",
+                            false);
+
+                        try { await LoadParkDataAsync(); } catch { }
+                        return;   // BARIYER ACILMAZ
+                    }
+                    // ucret 0 ise (ucretsiz tarife / cok kisa sure) normal akisa devam edilir
+                }
+                catch (Exception exUcret)
+                {
+                    // Ucret hesaplanamadiysa emin olamayiz -> GECIRME
+                    ShowToast($"{plate}: Ucret hesaplanamadi ({exUcret.Message}). Guvenlik geregi cikis yapilmadi.", false);
+                    return;
+                }
             }
 
             // 4. Borc kontrolu - tum bolge borclari + bu bolgeye ait borc.
@@ -1141,6 +1191,60 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             return resp?.Result?.Id ?? 0;
         }
         catch { return 0; }
+    }
+
+    /// <summary>
+    /// CIKIS BARIYERI BORC KONTROLU (manuel bariyer butonu icin).
+    ///
+    /// Onceden buton yalnizca satirdaki <c>OldDebt</c> alanina bakiyordu; o alan
+    /// VEW_VEHICLE_PARK.Balance'tan geliyor ve GERCEK borc (VEHICLE_CREDIT) DEGIL.
+    /// Bu yuzden borcu olan bir arac icin bile bariyer acilabiliyordu.
+    /// Artik otomatik cikis akisiyla AYNI otoriter kaynak kullanilir: plakadan araca,
+    /// aractan VEHICLE_CREDIT kayitlarina. Yikama bypass'i da ayni sekilde uygulanir.
+    ///
+    /// Doner: (bariyerAcilabilir, mesaj). Mesaj bos degilse kullaniciya gosterilir.
+    /// Emin olunamayan durumda GUVENLI taraf secilir (acilmaz).
+    /// </summary>
+    public async Task<(bool acilabilir, string mesaj, bool basarili)> CikisBariyeriIzinAsync(VehicleRow? row)
+    {
+        // Satir secili degilse eski davranis: serbest ac (operator elle kontrol ediyor)
+        if (row == null || string.IsNullOrWhiteSpace(row.Plate))
+            return (true, "", true);
+
+        try
+        {
+            var resp = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, row.Plate.Trim());
+            var vehicle = resp?.Result;
+            if (vehicle == null || vehicle.Id == 0)
+                return (true, "", true);   // arac kaydi yoksa borc da yoktur
+
+            var (zoneDebt, totalDebt) = await GetVehicleDebtsAsync(vehicle.Id);
+            if (zoneDebt <= 0)
+                return (true, "", true);
+
+            // Yikama fisi varsa ve ucretsiz sure DOLMAMISSA borc bypass edilir
+            try
+            {
+                var washStatus = await _vehicleApi.GetWashStatusAsync(UserSession.CompanyId, row.EntryId);
+                if (washStatus.HasWashReceipt && !washStatus.IsExpired)
+                    return (true, $"{row.Plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.", true);
+
+                if (washStatus.HasWashReceipt && washStatus.IsExpired)
+                    return (false,
+                        $"{row.Plate}: Yıkama için belirlenen ücretsiz süreniz bittiği için park ücreti " +
+                        $"({zoneDebt:0.##} TL) ödemeniz gerekiyor. Lütfen kiosk cihazından ödeme yapınız.", false);
+            }
+            catch { /* yikama durumu alinamazsa normal borc kurali uygulanir */ }
+
+            var msg = $"{row.Plate}: Kapalı Otopark borcu ({zoneDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.";
+            if (totalDebt > zoneDebt) msg += $" (Tüm bölgeler toplamı: {totalDebt:0.##} TL)";
+            return (false, msg, false);
+        }
+        catch (Exception ex)
+        {
+            // Borc dogrulanamadi -> GUVENLI taraf: acma
+            return (false, $"{row.Plate}: Borç durumu doğrulanamadı ({ex.Message}). Bariyer açılmadı.", false);
+        }
     }
 
     /// <summary>

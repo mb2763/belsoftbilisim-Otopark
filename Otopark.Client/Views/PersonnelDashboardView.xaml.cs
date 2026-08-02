@@ -778,40 +778,13 @@ namespace Otopark.Client.Views
         {
             if (DataContext is PersonnelDashboardViewModel vm)
             {
-                var sel = vm.SelectedVehicle;
-                if (sel != null && sel.OldDebt > 0)
-                {
-                    bool washBypass = false;
-                    try
-                    {
-                        var washStatus = await vm.ApiService.GetWashStatusAsync(
-                            Otopark.Core.Session.UserSession.CompanyId, sel.EntryId);
-                        if (washStatus.HasWashReceipt)
-                        {
-                            if (!washStatus.IsExpired)
-                            {
-                                washBypass = true;
-                            }
-                            else
-                            {
-                                vm.ShowBarrierToast(false,
-                                    $"{sel.Plate}: Yıkama için belirlenen ücretsiz süreniz bittiği için park ücreti " +
-                                    $"({sel.OldDebt:0.##} TL) ödemeniz gerekiyor. Lütfen kiosk cihazından ödeme yapınız.");
-                                return;
-                            }
-                        }
-                    }
-                    catch { /* yikama durumu alinamazsa normal borc kontrolune devam edilir */ }
-
-                    if (!washBypass)
-                    {
-                        vm.ShowBarrierToast(false,
-                            $"{sel.Plate}: Kapalı Otopark borcu ({sel.OldDebt:0.##} TL) ödenmeden çıkış bariyeri açılmaz.");
-                        return;
-                    }
-
-                    vm.ShowBarrierToast(true, $"{sel.Plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.");
-                }
+                // BORC KONTROLU: artik satirdaki OldDebt (=Balance, gercek borc DEGIL) yerine
+                // otomatik cikis akisiyla AYNI otoriter kaynak kullaniliyor -> VEHICLE_CREDIT.
+                // Borc varsa (ve yikama ile karsilanmadiysa) bariyer ACILMAZ.
+                var izin = await vm.CikisBariyeriIzinAsync(vm.SelectedVehicle);
+                if (!string.IsNullOrEmpty(izin.mesaj))
+                    vm.ShowBarrierToast(izin.basarili, izin.mesaj);
+                if (!izin.acilabilir) return;
             }
 
             var result = await Services.BarrierService.OpenExitGateAsync();
