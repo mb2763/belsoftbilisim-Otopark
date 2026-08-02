@@ -1121,7 +1121,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             };
 
             var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
-            if (exitResponse?.Errors != null && exitResponse.Errors.Count > 0)
+
+            // KRITIK: exitResponse == null durumu ONCEDEN sessizce BASARI sayiliyordu
+            // ('?.' yuzunden kosul false oluyordu) -> cikis kaydedilmemis olsa bile
+            // bariyer aciliyordu. Artik acikca basarisiz kabul edilir.
+            if (exitResponse == null)
+            {
+                ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucudan yanit alinamadi). Bariyer acilmadi.", false);
+                return;
+            }
+
+            if (exitResponse.Errors != null && exitResponse.Errors.Count > 0)
             {
                 var errorMsg = string.Join(", ", exitResponse.Errors
                     .Where(e => !string.IsNullOrEmpty(e.Message))
