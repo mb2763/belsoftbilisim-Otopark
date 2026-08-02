@@ -774,18 +774,37 @@ namespace Otopark.Client.Views
         /// borc olsa bile bariyer acilir (otopark ucreti yikama ile karsilanir). Sure DOLMUSSA
         /// normal borc mesaji yerine "yikama ucretsiz sureniz bitti, kiosktan odeyin" denir.
         /// </summary>
+        /// <summary>
+        /// BORCLU CIKISI YAP: secili araci BORCLANDIRARAK cikarir ve bariyeri acar.
+        /// Kuyrukta borcu tahsil edilemeyen arac bedava cikmasin diye kullanilir:
+        /// borc kayitli degilse yazilir, cikis islenir, ACIKLAMA'ya personel notu dusulur.
+        /// Borc ACIK kalir; arac bir sonraki gelisinde borclu gorunur.
+        /// </summary>
+        private async void BorcluCikis_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is not PersonnelDashboardViewModel vm) return;
+
+            if (vm.SelectedVehicle == null)
+            {
+                vm.ShowBarrierToast(false, "Once listeden arac seciniz.");
+                return;
+            }
+
+            var sonuc = await vm.BorcluCikisYapAsync(vm.SelectedVehicle);
+            if (!string.IsNullOrEmpty(sonuc.mesaj))
+                vm.ShowBarrierToast(sonuc.basarili, sonuc.mesaj);
+            if (!sonuc.acilsin) return;
+
+            var res = await Services.BarrierService.OpenExitGateAsync();
+            vm.ShowBarrierToast(res.Success, res.Message);
+        }
+
         private async void BarrierExit_Click(object sender, RoutedEventArgs e)
         {
-            if (DataContext is PersonnelDashboardViewModel vm)
-            {
-                // MANUEL BARIYER: personel kontrolunde acilir. Borclu araclarda onay sorulur;
-                // onaylanirsa arac BORCLANDIRILARAK cikarilir (borc yazilir + cikis islenir),
-                // yani bedava cikis olmaz. Borc kaynagi: VEHICLE_CREDIT (satirdaki OldDebt degil).
-                var izin = await vm.CikisBariyeriManuelAsync(vm.SelectedVehicle);
-                if (!string.IsNullOrEmpty(izin.mesaj))
-                    vm.ShowBarrierToast(izin.basarili, izin.mesaj);
-                if (!izin.acilsin) return;
-            }
+            // MANUEL CIKIS BARIYERI: personelin kontrolunde, SORGUSUZ acilir.
+            // Kuyrukta hizli kalmasi icin burada borc kontrolu YAPILMAZ.
+            // Borclu araci kayit altina alarak cikarmak icin ayri "Borclu Cikisi Yap"
+            // butonu vardir (BorcluCikis_Click).
 
             var result = await Services.BarrierService.OpenExitGateAsync();
             if (DataContext is PersonnelDashboardViewModel vm3)

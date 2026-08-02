@@ -1194,25 +1194,29 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// MANUEL CIKIS BARIYERI — personel kontrolunde acilir.
+    /// BORCLU CIKISI YAP — "Borclu Cikisi Yap" butonunun is mantigi.
     ///
-    /// Amac: kuyruk olustugunda personel bariyeri acabilsin AMA arac BEDAVA CIKMASIN.
-    /// Borclu arac icin personele onay sorulur; onaylanirsa:
+    /// Amac: kuyruk olustugunda borcu tahsil edilemeyen arac BEDAVA CIKMASIN.
+    /// Personel bu butona bastiginda:
     ///   1) borc kayitli degilse park ucreti hesaplanip VEHICLE_CREDIT olarak YAZILIR
     ///   2) cikis kaydi islenir (arac "hala iceride" kalmasin)
-    ///   3) bariyer acilir — borc ACIK kalir, arac bir sonraki gelisinde borclu gorunur
+    ///   3) ACIKLAMA alanina personel notu dusulur
+    ///      ("Personel bariyeri acti - borclandirilarak cikis yapildi")
+    ///   4) cagiran taraf bariyeri acar — borc ACIK kalir, arac sonraki gelisinde borclu gorunur
+    ///
+    /// NOT: Normal manuel bariyer butonu (BarrierExit_Click) SORGUSUZ acilir; kuyrukta
+    /// hizli kalmasi icin orada borc kontrolu yapilmaz. Bu metot ayri ve BILINCLI bir aksiyondur.
     ///
     /// Borc kaynagi otomatik cikis akisiyla AYNI: plaka -> arac -> VEHICLE_CREDIT.
-    /// (Onceden satirdaki OldDebt kullaniliyordu; o alan VEW_VEHICLE_PARK.Balance'tan
-    ///  gelir ve GERCEK borc degildir.)
+    /// (Satirdaki OldDebt kullanilmaz; o alan VEW_VEHICLE_PARK.Balance'tan gelir ve
+    ///  GERCEK borc degildir.)
     ///
     /// Doner: (bariyerAcilsin, mesaj, mesajBasariliMi)
     /// </summary>
-    public async Task<(bool acilsin, string mesaj, bool basarili)> CikisBariyeriManuelAsync(VehicleRow? row)
+    public async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapAsync(VehicleRow? row)
     {
-        // Satir secili degilse personel serbest acar (elle kontrol)
         if (row == null || string.IsNullOrWhiteSpace(row.Plate))
-            return (true, "", true);
+            return (false, "Once listeden arac seciniz.", false);
 
         try
         {
@@ -1252,17 +1256,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // ---- BORCLU ARAC: personele onay sor ----
             bool onay = OnConfirmRequired != null
                 ? await OnConfirmRequired.Invoke(
-                    "Borclu Arac - Bariyer Acilsin mi?",
+                    "Borclu Cikisi Yap",
                     $"{row.Plate} plakali aracin {borc:0.##} TL borcu var.\n\n" +
-                    "Bariyeri acarsaniz arac BORCLANDIRILARAK cikis yapacak:\n" +
+                    "Arac BORCLANDIRILARAK cikarilacak:\n" +
                     "  - Borc kayitli kalacak (silinmez)\n" +
                     "  - Cikis kaydi islenecek\n" +
+                    "  - Aciklamaya personel notu dusulecek\n" +
+                    "  - Bariyer acilacak\n" +
                     "  - Arac bir sonraki gelisinde BORCLU gorunecek\n\n" +
-                    "Kuyruk nedeniyle cikarmak istiyor musunuz?")
+                    "Onayliyor musunuz?")
                 : true;
 
             if (!onay)
-                return (false, $"{row.Plate}: Bariyer acilmadi. Borc {borc:0.##} TL.", false);
+                return (false, $"{row.Plate}: Islem iptal edildi. Borc {borc:0.##} TL.", false);
+
+            // ACIKLAMA'ya dusulecek personel notu (borc kaydi + cikis kaydi icin ayni metin)
+            string personelNotu =
+                $"Personel bariyeri acti - borclandirilarak cikis yapildi ({LoggedZoneName}, Kullanici: {UserSession.UserId})";
 
             // 1) Borc kayitli degilse YAZ (arac bedava cikmasin)
             if (yazilacakUcret > 0)
@@ -1275,7 +1285,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                         VehicleDefinitionId = vehicle.Id,
                         DebtAmount = yazilacakUcret.ToString(System.Globalization.CultureInfo.InvariantCulture),
                         PaidAmount = "0",
-                        Description = $"Kuyruk nedeniyle borclandirilarak cikis - manuel bariyer ({LoggedZoneName})",
+                        Description = personelNotu,
                         CompanyId = UserSession.CompanyId,
                         ZoneId = BolgeId,
                         VehicleExitId = 0
@@ -1328,6 +1338,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     ApplyFiltersInternal();
                 }
                 catch { /* cikis islenemezse bariyer yine acilir; borc zaten yazildi */ }
+            }
+
+            // 3) ACIKLAMA'ya personel notu (giris + varsa cikis kaydina)
+            if (row.EntryId > 0)
+            {
+                try { await _vehicleApi.AddEntryNoteAsync(row.EntryId, UserSession.CompanyId, personelNotu); }
+                catch { /* not yazilamazsa islem bozulmaz */ }
             }
 
             try { await LoadParkDataAsync(); } catch { }

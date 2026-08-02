@@ -179,6 +179,23 @@ public partial class VehicleParkApiService
     /// Her iki durumda VEHICLE_DEFINITION.CREDIT iptal edilen borc kadar azalir,
     /// ACIKLAMA alanlarina "IPTAL - neden" yazilir, revizyon logu dusulur.
     /// </summary>
+    /// <summary>
+    /// Girise (ve varsa cikislarina) ACIKLAMA notu yazar.
+    /// "Borclu Cikisi Yap" aksiyonunu kayit altina almak icin kullanilir.
+    /// Not yazilamazsa islem bozulmaz; cagiran taraf sonucu bilgi amacli kullanir.
+    /// </summary>
+    public async Task<bool> AddEntryNoteAsync(long entryId, long companyId, string note)
+    {
+        try
+        {
+            var url = $"VehiclePark/AddEntryNote?id={entryId}&companyId={companyId}"
+                    + $"&note={Uri.EscapeDataString(note ?? "")}";
+            using var response = await _http.PostAsync(url, null);
+            return response.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
     public async Task<DeleteEntryResponse?> CancelEntryAsync(long entryId, long companyId, long currentUserId, string reason)
     {
         var url = $"VehiclePark/CancelVehicleParkEntry?id={entryId}&companyId={companyId}"

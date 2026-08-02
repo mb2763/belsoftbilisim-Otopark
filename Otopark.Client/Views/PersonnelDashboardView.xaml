@@ -119,6 +119,17 @@
                                             Click="BarrierExit_Click"/>
                                 </StackPanel>
                             </StackPanel>
+                            <!-- BORCLU CIKISI: secili araci borclandirarak cikarir + bariyeri acar.
+                                 Kuyrukta borcu tahsil edilemeyen arac bedava cikmasin diye:
+                                 borc yazilir, cikis islenir, ACIKLAMA'ya personel notu dusulur. -->
+                            <StackPanel Margin="6,3,3,3" VerticalAlignment="Center">
+                                <Button x:Name="BtnBorcluCikis" Content="Borçlu Çıkışı Yap"
+                                        Width="118" Height="48" FontSize="10" FontWeight="Bold"
+                                        Background="#E53935" Foreground="White" BorderThickness="0" Cursor="Hand"
+                                        ToolTip="Seçili aracı borçlandırarak çıkarır ve bariyeri açar"
+                                        Click="BorcluCikis_Click"/>
+                            </StackPanel>
+
                             <!-- Kameralari durdur/baslat: giris-cikis islemeyi acar/kapatir -->
                             <StackPanel Margin="6,3,3,3" VerticalAlignment="Center">
                                 <Button x:Name="BtnToggleCameras" Content="Kameralar: ACIK"
