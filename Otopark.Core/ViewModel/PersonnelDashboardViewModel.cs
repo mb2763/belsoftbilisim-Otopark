@@ -816,7 +816,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Plakayi backend'de gunceller. Yeni plaka kayitli degilse popup acar, kayit sonrasi tekrar dener.
+    /// Plakayi backend'de gunceller (web Plaka Revizyon ekraniyla AYNI uc: UpdateVehicleParkEntryPlate).
+    ///
+    /// Sunucu tarafi artik:
+    ///   - Yeni plaka sistemde YOKSA araci OTOMATIK kaydeder (tarife/tip eski aractan kopyalanir),
+    ///     yani "once araci kaydediniz" hatasi normalde artik olusmaz.
+    ///   - SADECE bu girise ait borclarin VEHICLE_DEFINITION_ID'sini yeni araca tasir
+    ///     (cikis varsa VEHICLE_EXIT_ID'ye, yoksa giris borcuna gore eslesir).
+    ///   - Acik borc tasindiysa CREDIT bakiyesini eski aractan dusup yeni araca ekler.
+    /// Asagidaki "kayitli degil -> popup" yolu geriye donuk uyum icin BIRAKILDI: eski bir API
+    /// surumune baglanildiginda hala calisir.
+    ///
     /// Basariliysa true, aksi takdirde false doner (satir UI'da geri alinabilir).
     /// </summary>
     public async Task<bool> ApplyPlateCorrectionAsync(VehicleRow row, string newPlate)
