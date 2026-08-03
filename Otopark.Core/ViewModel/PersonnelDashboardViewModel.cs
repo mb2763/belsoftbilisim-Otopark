@@ -1246,20 +1246,19 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
             catch { /* yikama durumu alinamazsa normal akis */ }
 
-            // Kayitli borc yoksa, o ana kadar birikmis park ucretini hesapla
-            decimal borc = zoneDebt;
-            decimal yazilacakUcret = 0m;
-            if (borc <= 0 && row.EntryId > 0 && row.ExitDateTime == null)
+            // Bu girise ait GUNCEL park ucreti (cikis kaydina CALCULATED_FEE olarak yazilacak
+            // ve sunucu bu tutar uzerinden borcu KENDI olusturacak).
+            decimal parkUcreti = 0m;
+            if (row.EntryId > 0 && row.ExitDateTime == null)
             {
-                try
-                {
-                    yazilacakUcret = (decimal)await _vehicleApi.GetParkPriceAsync(row.EntryId);
-                    if (yazilacakUcret > 0) borc = yazilacakUcret;
-                }
-                catch { /* hesaplanamazsa borc 0 kabul edilir, asagida serbest gecer */ }
+                try { parkUcreti = (decimal)await _vehicleApi.GetParkPriceAsync(row.EntryId); }
+                catch { /* hesaplanamazsa 0 kalir */ }
             }
 
-            // Borc yoksa normal serbest cikis
+            // Ekranda gosterilecek toplam: mevcut kayitli borc + bu cikisin ucreti
+            decimal borc = zoneDebt + parkUcreti;
+
+            // Ne kayitli borc ne de ucret varsa normal serbest cikis
             if (borc <= 0)
                 return (true, "", true);
 
@@ -1280,46 +1279,27 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             if (!onay)
                 return (false, $"{row.Plate}: Islem iptal edildi. Borc {borc:0.##} TL.", false);
 
-            // ACIKLAMA'ya dusulecek personel notu (borc kaydi + cikis kaydi icin ayni metin)
+            // ACIKLAMA'ya dusulecek personel notu
             string personelNotu =
                 $"Personel bariyeri acti - borclandirilarak cikis yapildi ({LoggedZoneName}, Kullanici: {UserSession.UserId})";
 
-            // 1) Borc kayitli degilse YAZ (arac bedava cikmasin)
-            if (yazilacakUcret > 0)
-            {
-                try
-                {
-                    var borcResp = await _vehicleApi.AddVehicleCreditAsync(new AddVehicleCreditRequest
-                    {
-                        CurrentUserId = UserSession.UserId,
-                        VehicleDefinitionId = vehicle.Id,
-                        DebtAmount = yazilacakUcret.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        PaidAmount = "0",
-                        Description = personelNotu,
-                        CompanyId = UserSession.CompanyId,
-                        ZoneId = BolgeId,
-                        VehicleExitId = 0
-                    });
-                    if (borcResp?.Errors != null && borcResp.Errors.Count > 0)
-                    {
-                        var bMsg = string.Join(", ", borcResp.Errors
-                            .Where(x => !string.IsNullOrEmpty(x.Message)).Select(x => x.Message));
-                        // Borc yazilamadiysa bariyeri ACMA -> bedava cikis olmasin
-                        return (false, $"{row.Plate}: Borc kaydi olusturulamadi ({bMsg}). Bariyer acilmadi.", false);
-                    }
-                }
-                catch (Exception exB)
-                {
-                    return (false, $"{row.Plate}: Borc kaydi olusturulamadi ({exB.Message}). Bariyer acilmadi.", false);
-                }
-            }
-
-            // 2) Cikis kaydini isle (arac "hala iceride" kalmasin). Borc ACIK kalir.
+            // ---- CIKIS KAYDI: ucret + "Odeme Yapilmadi" ile ----
+            // ONEMLI: Borcu ISTEMCI YAZMAZ. Cikis istegi
+            //     CalculatedFee = <park ucreti>, PayableFee = 0, PaymentTypeId = NoPay(3)
+            // ile gonderildiginde SUNUCU:
+            //   - VEHICLE_PARK_EXIT.CALCULATED_FEE = ucret        (onceden 0 yaziliyordu)
+            //   - VEHICLE_PARK_EXIT.EXIT_CODE     = 3 (NoPay)     (onceden 1/Nakit yaziliyordu;
+            //                                                      ExitCode = Payment.PaymentTypeId)
+            //   - VEHICLE_CREDIT'i KENDI olusturur ve VEHICLE_EXIT_ID = olusan cikis id'si yapar
+            //     (onceden istemci borcu ayri yazdigi icin VEHICLE_EXIT_ID = 0 kaliyordu)
+            // Bu yuzden istemci tarafinda AddVehicleCredit CAGRILMAZ; aksi halde CIFT borc olusur.
             if (row.EntryId > 0 && row.ExitDateTime == null)
             {
+                const int ODEME_YAPILMADI = 3;   // PaymentType.NoPay -> EXIT_CODE = 3
+
                 try
                 {
-                    await _vehicleApi.AddExitAsync(new VehicleParkExitRequest
+                    var cikisResp = await _vehicleApi.AddExitAsync(new VehicleParkExitRequest
                     {
                         CurrentUserId = UserSession.UserId,
                         VehicleEntryId = row.EntryId,
@@ -1327,30 +1307,42 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                         ExitUserId = UserSession.UserId,
                         ExitZoneId = BolgeId,
                         ExitTimeStamp = DateTime.Now,
-                        CalculatedFee = "0",
-                        PayableFee = "0",
+                        // Gercek park ucreti -> VEHICLE_PARK_EXIT.CALCULATED_FEE
+                        CalculatedFee = parkUcreti.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        PayableFee = "0",           // tahsil edilmedi
                         MembershipDiscount = "0",
                         CompanyId = UserSession.CompanyId,
                         Payment = new PaymentModel
                         {
                             CurrentUserId = UserSession.UserId,
                             ReceiptNo = 0,
-                            PaymentTypeId = 1,
+                            PaymentTypeId = ODEME_YAPILMADI,   // -> EXIT_CODE = 3, sunucu borcu kendi yazar
                             AmountCash = "0",
                             PaymentTime = DateTime.Now,
                             CompanyId = UserSession.CompanyId
                         }
                     });
 
+                    if (cikisResp?.Errors != null && cikisResp.Errors.Count > 0)
+                    {
+                        var cMsg = string.Join(", ", cikisResp.Errors
+                            .Where(x => !string.IsNullOrEmpty(x.Message)).Select(x => x.Message));
+                        // Cikis islenemediyse borc da olusmaz -> bedava cikisa izin verme
+                        return (false, $"{row.Plate}: Cikis kaydedilemedi ({cMsg}). Bariyer acilmadi.", false);
+                    }
+
                     row.ExitDateTime = DateTime.Now;
                     row.ParkType = "Cikis";
                     UpdateParkCounts();
                     ApplyFiltersInternal();
                 }
-                catch { /* cikis islenemezse bariyer yine acilir; borc zaten yazildi */ }
+                catch (Exception exC)
+                {
+                    return (false, $"{row.Plate}: Cikis kaydedilemedi ({exC.Message}). Bariyer acilmadi.", false);
+                }
             }
 
-            // 3) ACIKLAMA'ya personel notu (giris + varsa cikis kaydina)
+            // ACIKLAMA'ya personel notu (giris + olusan cikis kaydina)
             if (row.EntryId > 0)
             {
                 try { await _vehicleApi.AddEntryNoteAsync(row.EntryId, UserSession.CompanyId, personelNotu); }
