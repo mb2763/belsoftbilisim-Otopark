@@ -15,6 +15,16 @@ public class VehicleParkExitRequest
     public string PayableFee { get; set; } = "0";
     public long CompanyId { get; set; }
     public PaymentModel Payment { get; set; } = new();
+
+    /// <summary>
+    /// BORC ZATEN VAR — cikista YENI borc yazma, MEVCUT borcu bu cikisa bagla.
+    /// Kapali Otopark'ta borc GIRISTE olusturuluyor ("Kapali Otopark Giris - PLAKA").
+    /// Bu bayrak olmadan NoPay(3) ile yapilan cikis ikinci bir borc daha yazar ve
+    /// VEHICLE_DEFINITION.CREDIT iki katina cikar (80 + 80 = 160).
+    /// true gonderildiginde sunucu yeni borc yazmaz; odenmemis ve henuz bir cikisa
+    /// baglanmamis borclarin VEHICLE_EXIT_ID'sini olusan cikisa baglar.
+    /// </summary>
+    public bool BorcZatenVar { get; set; } = false;
 }
 
 public class PaymentModel

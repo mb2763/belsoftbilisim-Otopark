@@ -1255,8 +1255,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 catch { /* hesaplanamazsa 0 kalir */ }
             }
 
-            // Ekranda gosterilecek toplam: mevcut kayitli borc + bu cikisin ucreti
-            decimal borc = zoneDebt + parkUcreti;
+            // Gosterilecek borc: KAYITLI borc (girişte zaten yazildi).
+            // DIKKAT: zoneDebt + parkUcreti TOPLANMAZ - ayni ucret iki kez sayilir
+            // (girişte 80 borc yazilmis, GetParkPrice yine 80 doner -> 160 gorunurdu).
+            // Kayitli borc yoksa (nadiren) hesaplanan ucrete duselir.
+            decimal borc = zoneDebt > 0 ? zoneDebt : parkUcreti;
 
             // Ne kayitli borc ne de ucret varsa normal serbest cikis
             if (borc <= 0)
@@ -1312,6 +1315,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                         PayableFee = "0",           // tahsil edilmedi
                         MembershipDiscount = "0",
                         CompanyId = UserSession.CompanyId,
+                        // Borc GIRISTE yazildi ("Kapali Otopark Giris - PLAKA").
+                        // Sunucu ikinci borc YAZMASIN; mevcut borcu bu cikisa BAGLASIN.
+                        // Aksi halde CREDIT iki katina cikiyordu (80 -> 160).
+                        BorcZatenVar = true,
                         Payment = new PaymentModel
                         {
                             CurrentUserId = UserSession.UserId,
