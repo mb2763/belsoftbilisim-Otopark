@@ -649,9 +649,12 @@ namespace Otopark.Client.Views
             // 1) Lokal multi-engine motor (ONNX YOLO + ONNX OCR + Tesseract+Haar) - tamamen ucretsiz.
             //    LocalPlateRecognizer 70 ulke format kutuphanesine karsi dogrulanmis sonuc dondurur.
             PlateRecognitionResult? localResult = null;
+            bool kutuBulundu = false;
             if (_recognizer != null)
             {
-                localResult = await _recognizer.RecognizeAsync(imagePath, ct);
+                var outcome = await _recognizer.RecognizeDetailedAsync(imagePath, ct);
+                kutuBulundu = outcome.KutuBulundu;
+                localResult = outcome.Sonuc;
                 if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
                 {
                     var normalized = PlateRules.Normalize(localResult.Plate);
@@ -663,9 +666,23 @@ namespace Otopark.Client.Views
             }
 
             // 2) Lokal yetmedi - API yedek (kota varsa)
+            //
+            // KOTA KORUMASI (kritik): buluta SADECE "plaka kutusu bulundu ama okunamadi"
+            // durumunda gidilir. Bos koridor karesinde gidilmez.
+            // Olcum (1388 gercek kare): 1209 kare bos (%87), 179 karede kutu var,
+            // bunlarin sadece 4'u okunamiyor. Bu kontrol olmadan kamera 0.5 sn'de bir
+            // kare urettigi icin gunde ~75.000 bosa sorgu yapilir; Plate Recognizer
+            // ucretsiz kotasi 2.500/AY, en buyuk plan 500.000/ay. Yani kota saatler
+            // icinde tukenir. Bu kontrolle gunluk sorgu birkac yuzu gecmez.
+            if (!kutuBulundu)
+                return null;
+
             try
             {
-                var r = await _client.RecognizeAsync(imagePath, "tr", ct);
+                // Bolge ipucu VERILMIYOR (eskiden "tr" gonderiliyordu).
+                // Buraya zaten lokal motorun okuyamadigi kareler dusuyor; bunlarin
+                // onemli kismi yabanci plaka. "tr" ipucu yabanci plakayi bozar.
+                var r = await _client.RecognizeAsync(imagePath, null, ct);
                 if (r != null && !string.IsNullOrWhiteSpace(r.Plate))
                 {
                     var plate = PlateRules.Normalize(r.Plate);

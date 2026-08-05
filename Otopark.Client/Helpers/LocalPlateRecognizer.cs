@@ -109,12 +109,30 @@ namespace Otopark.Client.Helpers
             return Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
-                return RecognizeInternal(imagePath);
+                return RecognizeInternal(imagePath, out _);
             }, ct);
         }
 
-        private PlateRecognitionResult? RecognizeInternal(string imagePath)
+        /// <summary>
+        /// RecognizeAsync ile ayni isi yapar, EK OLARAK karede plaka kutusu bulunup
+        /// bulunmadigini da bildirir.
+        /// KULLANIM AMACI: bulut API kotasini korumak. Bos koridor karesinde (kutu yok)
+        /// buluta gitmenin anlami yoktur; sadece "kutu var ama okunamadi" durumunda
+        /// buluta basvurulmalidir. Olculdu: 1388 karenin 1209'unda (%87) kutu yok.
+        /// </summary>
+        public Task<PlateReadOutcome> RecognizeDetailedAsync(string imagePath, CancellationToken ct)
         {
+            return Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var sonuc = RecognizeInternal(imagePath, out bool kutuBulundu);
+                return new PlateReadOutcome { KutuBulundu = kutuBulundu, Sonuc = sonuc };
+            }, ct);
+        }
+
+        private PlateRecognitionResult? RecognizeInternal(string imagePath, out bool kutuBulundu)
+        {
+            kutuBulundu = false;
             if (_initError || !File.Exists(imagePath)) return null;
 
             Mat? src = null;
@@ -126,6 +144,9 @@ namespace Otopark.Client.Helpers
                 // 1) Plaka bolgelerini bul (ONNX > Haar > heuristic)
                 var regions = DetectPlateRegions(src, out string bolgeKaynagi);
                 if (regions.Count == 0) return null;
+
+                // Buradan sonrasi = karede plaka kutusu VAR (okunabilse de okunamasa da)
+                kutuBulundu = true;
 
                 // Detection bulundu = arac var. Orijinal frame'i ayri klasore kopyala
                 // (gelistirme/debug icin; plaka tanindiktan sonra dosya adi guncellenir).
@@ -736,5 +757,15 @@ namespace Otopark.Client.Helpers
         public string Plate { get; }
         public double Score { get; }
         public PlateRecognitionResult(string plate, double score) { Plate = plate; Score = score; }
+    }
+
+    /// <summary>
+    /// Lokal tanima sonucu + karede plaka kutusu bulunup bulunmadigi bilgisi.
+    /// KutuBulundu=false ise kare bos koridordur; bulut API'ye gitmek kota israfidir.
+    /// </summary>
+    public sealed class PlateReadOutcome
+    {
+        public bool KutuBulundu { get; set; }
+        public PlateRecognitionResult? Sonuc { get; set; }
     }
 }
