@@ -47,16 +47,29 @@ namespace Otopark.Client.Helpers
         };
 
         // ---------------------------------------------------------------------------
-        // PLAKA OCR
-        // fast-plate-ocr release varliklari kaldirilmis; HuggingFace deposu da artik
-        // herkese acik degil (HTTP 401). Calisan bir HERKESE ACIK kaynak bulunamadi.
-        // Diskteki mevcut model (C:\Otopark\models\plate_ocr.onnx, 5 MB, NHWC [N,64,128,3])
-        // CALISIYOR; bu yuzden OCR icin otomatik indirme YEDEGI YOK.
-        // Yeni bir makineye kurulumda plate_ocr.onnx ELLE kopyalanmalidir.
+        // PLAKA OCR (fast-plate-ocr, Apache 2.0)
+        //
+        // ONCEKI adresler 404 veriyordu ama release SILINMEMIS — dosya adlari YANLIS yazilmisti.
+        // Kutuphanenin MODEL ANAHTARI ile release ASSET ADI farkli:
+        //     model anahtari : european-plates-mobile-vit-v2-model   (tire)
+        //     gercek asset   : european_mobile_vit_v2_ocr.onnx       (alt cizgi)
+        //
+        // DOGRULANDI (HTTP 200 + boyut olculdu):
+        //     cct_s_v2_global.onnx   5.262.230 bayt
+        //     cct_xs_v2_global.onnx  3.2 MB
+        // Diskteki C:\Otopark\models\plate_ocr.onnx BIREBIR 5.262.230 bayt,
+        // yani su an calisan model cct_s_v2_global.onnx'tir.
+        //
+        // Bicim: giris NHWC [N,64,128,3] uint8, alfabe "0123456789A-Z_" — koddaki
+        // OnnxPlateOcr sabitleriyle birebir ortusuyor. Turkiye plakalari egitim
+        // kapsamindaki bolgeler arasinda.
         // ---------------------------------------------------------------------------
         private static readonly string[] OcrUrls =
         {
-            // Calisan herkese acik adres bulunursa buraya eklenecek.
+            // s = en dogru (su an kullanilan)
+            "https://github.com/ankandrew/fast-plate-ocr/releases/download/arg-plates/cct_s_v2_global.onnx",
+            // xs = ~1.45x hizli, biraz daha dusuk dogruluk (CPU cok zorlanirsa)
+            "https://github.com/ankandrew/fast-plate-ocr/releases/download/arg-plates/cct_xs_v2_global.onnx",
         };
 
         private static readonly SemaphoreSlim _gate = new(1, 1);
