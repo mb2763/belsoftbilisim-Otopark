@@ -717,6 +717,57 @@ namespace Otopark.Client.Views
         private readonly record struct OkumaSonucu(
             string Plate, double Score, bool Supheli, double MinChar, bool Kenarda);
 
+        /// <summary>
+        /// Lokal motor SUPHELI bir okuma verdiginde buluta ikinci gorus sorar.
+        /// null donerse bulut bir sey soyleyemedi (kota/hata/okuyamadi) -> lokal sonuc gecerli.
+        ///
+        /// Birlestirme kurali:
+        ///   bulut = lokal        -> iki bagimsiz motor uzlasti, SUPHE KALKAR (otomatik onay)
+        ///   bulut != lokal, guclu-> BULUTUN okumasi kullanilir, supphe SURER (personel dogrular)
+        ///   bulut zayif/yok      -> lokal sonuc, supphe surer
+        /// </summary>
+        private async Task<OkumaSonucu?> BulutIkinciGorusAsync(
+            string imagePath, string lokalPlaka, CancellationToken ct)
+        {
+            if (!BulutKotaBekcisi.IzinVar(lokalPlaka)) return null;
+
+            try
+            {
+                var r = await _client.RecognizeAsync(imagePath, null, ct);
+                if (r == null || string.IsNullOrWhiteSpace(r.Plate))
+                {
+                    Log($"Bulut ikinci gorus: okuyamadi (lokal '{lokalPlaka}' supheli kaliyor)");
+                    return null;
+                }
+
+                var bulutPlaka = PlateRules.Normalize(r.Plate);
+                if (bulutPlaka.Length < 5) return null;
+
+                if (string.Equals(bulutPlaka, lokalPlaka, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log($"Bulut ikinci gorus: UZLASMA '{lokalPlaka}' (bulut skor={r.Score:F2}) " +
+                        $"-> supphe kalkti, otomatik onaya uygun");
+                    return new OkumaSonucu(lokalPlaka, Math.Max(0.90, r.Score), false, r.Score, false);
+                }
+
+                // Bulut farkli okudu. Yalnizca KENDINDEN EMINSE onun okumasini al.
+                if (r.Score >= 0.90)
+                {
+                    Log($"Bulut ikinci gorus: FARKLI okuma - lokal '{lokalPlaka}' vs bulut " +
+                        $"'{bulutPlaka}' (skor={r.Score:F2}) -> BULUT kullanildi, personel dogrulamali");
+                    return new OkumaSonucu(bulutPlaka, 0.90, true, r.Score, false);
+                }
+
+                Log($"Bulut ikinci gorus: zayif ('{bulutPlaka}' skor={r.Score:F2}) -> lokal '{lokalPlaka}' kaldi");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Log($"Bulut ikinci gorus hatasi: {ex.Message}");
+                return null;
+            }
+        }
+
         // LOCAL-FIRST mod: Once lokal OCR'i dene, yetmezse API'ye gec (kota tasarrufu)
         private async Task<OkumaSonucu?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
@@ -736,8 +787,28 @@ namespace Otopark.Client.Views
                     // eleniyor ve bulut API'ye dusuluyordu; bulut da kapaliysa arac kaciyordu.
                     if (normalized.Length >= 5)
                     {
+                        // EMIN okuma -> buluta hic gitme, dogrudan kabul.
+                        if (!localResult.Supheli)
+                        {
+                            return new OkumaSonucu(normalized, localResult.Score,
+                                false, localResult.MinCharProb, localResult.Kenarda);
+                        }
+
+                        // SUPHELI okuma -> bulut IKINCI GORUS olarak sorulur.
+                        //
+                        // Olculdu: sorunlu 5 karenin 1'ini bulut dogru okudu
+                        // (bizim '2CSR324' -> bulut '2CSR322' skor 0.94 = dogrusu),
+                        // 4'unu bulut da okuyamadi. Yani bedava bir duzeltme sansi.
+                        //
+                        // Kota: supheli kareler ayda ~2950 sorgu ederdi (kota 2500/ay).
+                        // BulutKotaBekcisi ayni plakayi 60 sn icinde tekrar sormaz ve
+                        // saatlik tavan uygular -> ayda ~500 sorguya iner.
+                        var ikinciGorus = await BulutIkinciGorusAsync(imagePath, normalized, ct);
+                        if (ikinciGorus != null)
+                            return ikinciGorus.Value;
+
                         return new OkumaSonucu(normalized, localResult.Score,
-                            localResult.Supheli, localResult.MinCharProb, localResult.Kenarda);
+                            true, localResult.MinCharProb, localResult.Kenarda);
                     }
                 }
             }
@@ -752,6 +823,10 @@ namespace Otopark.Client.Views
             // ucretsiz kotasi 2.500/AY, en buyuk plan 500.000/ay. Yani kota saatler
             // icinde tukenir. Bu kontrolle gunluk sorgu birkac yuzu gecmez.
             if (!kutuBulundu)
+                return null;
+
+            // Ayni kota bekcisi burada da gecerli (plaka metni yok -> "?" anahtari)
+            if (!BulutKotaBekcisi.IzinVar(null))
                 return null;
 
             try
