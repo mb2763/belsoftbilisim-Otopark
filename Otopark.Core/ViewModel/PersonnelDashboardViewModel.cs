@@ -1645,10 +1645,19 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     // ===== LOGOUT =====
 
+    /// <summary>
+    /// Cikis yapip giris ekranina doner.
+    ///
+    /// ESKIDEN her cikista "new HttpClient { BaseAddress = ... }" olusturuluyordu.
+    /// Iki sorun: (1) her HttpClient kendi baglanti havuzunu acar, atilmadigi icin
+    /// soket TIME_WAIT'te birikir; (2) sunucu adresinin 6. kopyasi burada gomuluydu.
+    /// Artik zaten elimizde olan _zoneApi'nin HttpClient'i yeniden kullaniliyor -
+    /// adres de tek yerden gelmis oluyor.
+    /// </summary>
     [RelayCommand]
     private void Logout()
     {
-        var http = new HttpClient { BaseAddress = new Uri("http://web.belsoft.com.tr:221/") };
+        var http = _zoneApi.Http;
         var auth = new AuthApiService(http);
         var zone = new ZoneApiService(http);
         var loginVm = new LoginViewModel(auth, zone, _main);

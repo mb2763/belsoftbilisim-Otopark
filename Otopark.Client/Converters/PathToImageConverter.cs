@@ -41,11 +41,41 @@ public sealed class PathToImageConverter : IValueConverter
                 return null;
             }
 
-            // BitmapFrame: BitmapImage + StreamSource'un 'key null' bug'ina karsi alternatif
+            // ===== DECODE =====
+            // ESKIDEN: BitmapFrame.Create ile TAM COZUNURLUKTE decode edilip sonra
+            // TransformedBitmap ile kucultuluyordu. 2560x1440 bir kare ~14 MB piksel
+            // tamponu demek; bu is UI thread'inde, kamera goruntusu her degistiginde
+            // (500 ms'de bir x 6 Image kontrolu) tekrarlaniyordu -> surekli CPU + GC baskisi.
+            //
+            // ARTIK: DecodePixelWidth ile JPEG decoder goruntuyu DOGRUDAN hedef genislikte
+            // acar; tam boyutlu ara tampon hic olusmaz (5-10 kat daha az is ve bellek).
+            //
+            // Not: dosyanin eski yorumu "BitmapImage + StreamSource 'key null' bug'i" diyordu.
+            // O bug'in bilinen sebebi stream'in erken kapanmasi/paylasilmasidir; asagida
+            // stream ayri tutulur, CacheOption.OnLoad ile veri hemen okunur ve Freeze edilir.
+            // Sorun tekrar ederse catch bloguna dusulur ve BitmapFrame yoluna geri donulur.
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = new MemoryStream(data);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;      // veriyi simdi oku
+                bmp.CreateOptions = BitmapCreateOptions.None;
+                bmp.DecodePixelWidth = decodeWidth;              // ASIL KAZANC
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch (Exception exFast)
+            {
+                LogErrThrottled($"PathToImage: hizli decode basarisiz ({exFast.GetType().Name}: " +
+                                $"{exFast.Message}), BitmapFrame yoluna donuluyor.");
+            }
+
+            // GERI CEKILME: eski yol (tam decode + olcekleme)
             var memStream = new MemoryStream(data);
             var frame = BitmapFrame.Create(memStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
 
-            // Buyuk goruntuleri olceklendir (bellek tasarrufu)
             if (frame.PixelWidth > decodeWidth)
             {
                 double scale = (double)decodeWidth / frame.PixelWidth;

@@ -25,10 +25,24 @@ public static class CameraSnapshotService
         : (AppConfig.Configuration["CameraSnapshot:ExitSnapshotUrl"] ?? "");
     private static int SaveIntervalMs => int.TryParse(AppConfig.Configuration["CameraSnapshot:IntervalMs"], out var v) ? v : 500;
 
-    // Klasorde tutulacak maksimum dosya sayisi.
-    // GELISTIRME SURECINDE: silme DEVRE DISI (0 = silme yapma) - foto kaybi olmasin diye.
-    // Production'a alindiginda makul bir limit (orn. 5000-10000) konabilir.
-    private const int MaxFiles = 0;
+    /// <summary>
+    /// Capture klasorunde tutulacak maksimum kare sayisi.
+    ///
+    /// KRITIK (06.08.2026): burasi 0 idi ("gelistirme sureci" notuyla) ve 0 = SILME YOK
+    /// anlamina geliyordu. Kamera 500 ms'de bir kare yazdigi icin klasor saatte ~7.200,
+    /// 8 saatte ~57.600 dosyaya cikiyordu. UI thread ise her 400 ms'de bu klasoru bastan
+    /// sona tarayip siraliyordu. Olculdu (listele+stat+sirala):
+    ///     1.000 dosya ->  28 ms/tarama
+    ///    20.000 dosya -> 1.078 ms/tarama   (tick basina 4 tarama = 4,3 sn)
+    ///    60.000 dosya -> 3.742 ms/tarama   (tick basina 15 sn)
+    /// Yani ~2 saat calisma sonrasi arayuz fiilen doniyordu. "Genel yavaslik" buydu.
+    ///
+    /// 400 neden yeterli: UI yalnizca son 3 kareyi gosteriyor, stabilizer penceresi 10 sn,
+    /// DuplicateSuppressor 120 sn. 400 kare ~3,3 dakikalik tampon demek - fazlasiyla yeter.
+    /// Plaka tanindiginda o kare zaten VehicleFrames'e ve snapshot klasorune kopyalaniyor,
+    /// yani kanit fotograflari bu temizlikten ETKILENMEZ.
+    /// </summary>
+    private const int MaxFiles = 400;
 
     // JPEG marker'lari
     private static readonly byte[] JpegStart = { 0xFF, 0xD8 };
@@ -291,23 +305,77 @@ public static class CameraSnapshotService
         catch { }
     }
 
+    /// <summary>
+    /// Klasorde en fazla MaxFiles kare birakir.
+    ///
+    /// ESKIDEN her dosya icin FileInfo olusturulup LastWriteTimeUtc'ye gore siralaniyordu;
+    /// bu, dosya basina bir stat cagrisi demek (asil pahali kisim). Dosya adi zaten
+    /// "snap_yyyyMMdd_HHmmss_fff.jpg" formatinda KRONOLOJIK SIRALI oldugu icin duz metin
+    /// siralamasi ayni sonucu verir ve stat'a hic gerek kalmaz.
+    ///
+    /// Her kare kaydinda cagriliyor; n~400'de maliyeti onemsiz.
+    /// </summary>
     private static void CleanupOldFiles(string folder)
     {
-        // MaxFiles == 0 ise silme yapilmaz (gelistirme suresi).
         if (MaxFiles <= 0) return;
         try
         {
-            var files = Directory.GetFiles(folder, "snap_*.jpg")
-                .Select(p => new FileInfo(p))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
-                .ToList();
+            var files = Directory.GetFiles(folder, "snap_*.jpg");
+            if (files.Length <= MaxFiles) return;
 
-            foreach (var old in files.Skip(MaxFiles))
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);   // eskiden yeniye
+
+            // Bastaki (en eski) fazlaligi sil
+            int silinecek = files.Length - MaxFiles;
+            for (int i = 0; i < silinecek; i++)
             {
-                try { old.Delete(); } catch { }
+                try { File.Delete(files[i]); } catch { }
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// ACILIS SUPURMESI - sahada birikmis devasa klasorleri kurtarir.
+    ///
+    /// MaxFiles=0 doneminde klasorlerde 100.000+ dosya birikmis olabilir. Bu supurme
+    /// olmadan ilk CleanupOldFiles cagrisi on binlerce dosyayi TEK SEFERDE silmeye
+    /// calisir; SaveFrame icinden cagrildigi icin de kamera dongusu dakikalarca tikanir
+    /// ve ilk kare cok gec gelir.
+    ///
+    /// Bu yuzden temizlik kamera dongusu BASLAMADAN, ayri bir Task'ta yapilir.
+    /// Sessizdir: basarisiz olursa uygulama normal calismaya devam eder.
+    /// </summary>
+    public static Task TemizleAsync(params string[] folders)
+    {
+        return Task.Run(() =>
+        {
+            foreach (var folder in folders)
+            {
+                if (string.IsNullOrWhiteSpace(folder)) continue;
+                try
+                {
+                    if (!Directory.Exists(folder)) continue;
+
+                    var files = Directory.GetFiles(folder, "snap_*.jpg");
+                    if (files.Length <= MaxFiles) continue;
+
+                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                    int silinecek = files.Length - MaxFiles;
+                    int basarili = 0;
+                    for (int i = 0; i < silinecek; i++)
+                    {
+                        try { File.Delete(files[i]); basarili++; } catch { }
+                    }
+                    CameraDiag.Write($"Acilis temizligi: {folder} -> {files.Length} dosyadan " +
+                                   $"{basarili} tanesi silindi, {files.Length - basarili} kaldi.");
+                }
+                catch (Exception ex)
+                {
+                    CameraDiag.Write($"Acilis temizligi hatasi ({folder}): {ex.Message}");
+                }
+            }
+        });
     }
 
     /// <summary>

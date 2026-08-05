@@ -25,6 +25,13 @@ public sealed class ZoneApiService
 {
     private readonly HttpClient _http;
 
+    /// <summary>
+    /// Bu servisin kullandigi HttpClient. Cikis (Logout) akisi giris ekranini yeniden
+    /// kurarken ayni client'i yeniden kullanir; boylece her cikista yeni HttpClient
+    /// olusturulup soket biriktirilmez ve sunucu adresi tek yerden gelir.
+    /// </summary>
+    public HttpClient Http => _http;
+
     public ZoneApiService(HttpClient http)
     {
         _http = http;

@@ -291,6 +291,17 @@ namespace Otopark.Client.Views
                     await Services.CameraConfigService.LoadAsync(Otopark.Core.Session.UserSession.CompanyId, zoneId);
             }
             catch { }
+
+            // ACILIS TEMIZLIGI - kamera dongusu BASLAMADAN once.
+            // 1) Bugunun klasorunde MaxFiles=0 doneminden kalma on binlerce dosya olabilir.
+            //    Bu supurme olmadan ilk CleanupOldFiles cagrisi (SaveFrame icinden) hepsini
+            //    tek seferde silmeye calisir ve kamera dongusunu dakikalarca tikar.
+            // 2) Gun klasorleri (Entry\yyyy\MM\dd) hic silinmiyordu - Nisan'dan beri
+            //    birikiyorlardi. DiskBakim 14 gunden eskileri temizler.
+            // Beklenmez (await yok) - kamera hemen baslasin, bakim arkada yurusun.
+            _ = Services.CameraSnapshotService.TemizleAsync(EntryCaptureFolder, ExitCaptureFolder);
+            _ = Helpers.DiskBakim.TumBakimAsync();
+
             Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
 
             // Kamera cozulemediyse kullaniciya SEBEBINI bildir (eskiden sessizce goruntu gelmiyordu).
@@ -438,28 +449,43 @@ namespace Otopark.Client.Views
         {
             if (!Directory.Exists(folder)) return;
 
-            var latest = GetLatestImageFile(folder);
+            // Tek tarama, dosya adina gore (stat cagrisi yok) - bkz. SonGorseller.
+            var latestPath = GetLatestImagePath(folder);
 
-            // Cikis klasorunde yeni dosya yoksa giris klasorunden dene
-            if (!isEntry && (latest == null || latest.LastWriteTimeUtc < DateTime.UtcNow.AddMinutes(-5)))
+            // Cikis klasorunde yeni dosya yoksa giris klasorunden dene.
+            // Dosya adi kronolojik oldugundan "daha yeni mi" karsilastirmasi ad uzerinden yapilir.
+            if (!isEntry)
             {
-                var entryLatest = GetLatestImageFile(EntryCaptureFolder);
-                if (entryLatest != null && (latest == null || entryLatest.LastWriteTimeUtc > latest.LastWriteTimeUtc))
-                    latest = entryLatest;
+                bool bayat = latestPath == null ||
+                             (DateTime.UtcNow - File.GetLastWriteTimeUtc(latestPath)).TotalMinutes > 5;
+                if (bayat)
+                {
+                    var entryLatest = GetLatestImagePath(EntryCaptureFolder);
+                    if (entryLatest != null &&
+                        (latestPath == null ||
+                         string.CompareOrdinal(Path.GetFileName(entryLatest), Path.GetFileName(latestPath)) > 0))
+                    {
+                        latestPath = entryLatest;
+                    }
+                }
             }
 
-            if (latest == null) return;
+            if (latestPath == null) return;
+
+            DateTime latestWriteUtc;
+            try { latestWriteUtc = File.GetLastWriteTimeUtc(latestPath); }
+            catch { return; }   // dosya bu arada silindi (temizlik) - sonraki tick'te bakilir
 
             var lastFile = isEntry ? _lastEntryFile : _lastExitFile;
             var lastWrite = isEntry ? _lastEntryWriteUtc : _lastExitWriteUtc;
 
-            if (latest.FullName == lastFile && latest.LastWriteTimeUtc == lastWrite)
+            if (latestPath == lastFile && latestWriteUtc == lastWrite)
                 return;
 
-            if (!await WaitUntilFileReady(latest.FullName, ct)) return;
+            if (!await WaitUntilFileReady(latestPath, ct)) return;
 
-            if (isEntry) { _lastEntryFile = latest.FullName; _lastEntryWriteUtc = latest.LastWriteTimeUtc; }
-            else { _lastExitFile = latest.FullName; _lastExitWriteUtc = latest.LastWriteTimeUtc; }
+            if (isEntry) { _lastEntryFile = latestPath; _lastEntryWriteUtc = latestWriteUtc; }
+            else { _lastExitFile = latestPath; _lastExitWriteUtc = latestWriteUtc; }
 
             // Watcher yolu (OnNewImageAsync) bu gate'i aliyordu ama timer yolu ALMIYORDU.
             // Sonuc: ayni stabilizer'a iki thread'den es zamanli Push -> buffer bozulmasi
@@ -469,7 +495,7 @@ namespace Otopark.Client.Views
 
             try
             {
-                await TryDetectAndSetAsync(latest.FullName, isEntry, ct);
+                await TryDetectAndSetAsync(latestPath, isEntry, ct);
             }
             finally { gate.Release(); }
         }
@@ -1046,7 +1072,7 @@ namespace Otopark.Client.Views
             try
             {
                 Directory.CreateDirectory(saveDir);
-                var first = GetLatestImageFile(captureFolder)?.FullName;
+                var first = GetLatestImagePath(captureFolder);
                 if (first == null) return;
 
                 string prefix = isEntry ? "entry" : "exit";
@@ -1055,7 +1081,7 @@ namespace Otopark.Client.Views
 
                 await Task.Delay(250);
 
-                var second = GetLatestImageFile(captureFolder)?.FullName;
+                var second = GetLatestImagePath(captureFolder);
                 if (second == null) return;
 
                 string photo2 = Path.Combine(saveDir, $"{prefix}2_{DateTime.Now:yyyyMMdd_HHmmss}.jpg");
@@ -1111,61 +1137,123 @@ namespace Otopark.Client.Views
 
         private DateTime _lastFolderLog = DateTime.MinValue;
 
+        /// <summary>UI timer'i yeniden girmesin (tarama diskten donmeden yeni tick baslamasin).</summary>
+        private bool _uiBusy;
+
+        /// <summary>
+        /// Kamera gorsellerini tazeler.
+        ///
+        /// ESKI HALI (yavaslik kaynagi): 400 ms'de bir, UI THREAD'inde, klasor basina IKI
+        /// ayri tarama (buyuk gorsel icin 1 + kucukler icin 1) x 2 klasor = tick basina
+        /// DORT tam tarama. Her tarama tum klasoru FileInfo'ya cevirip LastWriteTimeUtc'ye
+        /// gore siraliyordu. 20.000 dosyada tick basina ~4,3 sn -> arayuz doniyordu.
+        ///
+        /// YENI HALI:
+        ///   - Klasor basina TEK tarama, ikisi de tek Task.Run icinde (UI thread'de is yok)
+        ///   - Siralama dosya ADINA gore (snap_yyyyMMdd_HHmmss_fff zaten kronolojik) ->
+        ///     dosya basina stat cagrisi YOK
+        ///   - Yalnizca son 3 dosya secilir; tam siralama yerine tek gecis
+        ///   - Tani logunun dosya sayisi ayni taramadan gelir (ekstra GetFiles YOK)
+        /// </summary>
         private void LoadLatestImages()
         {
-            if (DataContext is not PersonnelDashboardViewModel vm) return;
+            if (_uiBusy) return;
+            if (DataContext is not PersonnelDashboardViewModel) return;
 
-            // Giris buyuk gorsel
-            var entryImg = GetLatestImageFile(EntryCaptureFolder);
-            if (entryImg != null) vm.EntryCameraImagePath = entryImg.FullName;
-
-            // Giris son 2 kucuk gorsel
-            var entryFiles = GetLatestImageFiles(EntryCaptureFolder, 2);
-            if (entryFiles.Length > 0) vm.EntryPhoto1 = entryFiles[0];
-            if (entryFiles.Length > 1) vm.EntryPhoto2 = entryFiles[1];
-
-            // Cikis buyuk gorsel
-            var exitImg = GetLatestImageFile(ExitCaptureFolder);
-            if (exitImg != null) vm.ExitCameraImagePath = exitImg.FullName;
-
-            // Cikis son 2 kucuk gorsel
-            var exitFiles = GetLatestImageFiles(ExitCaptureFolder, 2);
-            if (exitFiles.Length > 0) vm.ExitPhoto1 = exitFiles[0];
-            if (exitFiles.Length > 1) vm.ExitPhoto2 = exitFiles[1];
-
-            // Tani log: 30 saniyede bir, klasor durumunu logla
-            if ((DateTime.Now - _lastFolderLog).TotalSeconds >= 30)
+            _uiBusy = true;
+            _ = Task.Run(async () =>
             {
-                _lastFolderLog = DateTime.Now;
-                int eCount = Directory.Exists(EntryCaptureFolder) ? Directory.GetFiles(EntryCaptureFolder, "*.jpg").Length : -1;
-                int xCount = Directory.Exists(ExitCaptureFolder) ? Directory.GetFiles(ExitCaptureFolder, "*.jpg").Length : -1;
-                Log($"UI: Entry={EntryCaptureFolder} ({eCount} dosya) | Exit={ExitCaptureFolder} ({xCount} dosya)");
-                Log($"UI: EntryCam='{vm.EntryCameraImagePath}' | ExitCam='{vm.ExitCameraImagePath}'");
-            }
+                try
+                {
+                    // --- DISK ISI: UI thread'in disinda ---
+                    var entry = SonGorseller(EntryCaptureFolder, 3);
+                    var exit = SonGorseller(ExitCaptureFolder, 3);
+
+                    bool logZamani = (DateTime.Now - _lastFolderLog).TotalSeconds >= 30;
+                    if (logZamani) _lastFolderLog = DateTime.Now;
+
+                    // --- YALNIZCA ATAMALAR UI thread'de ---
+                    await Dispatcher.InvokeAsync(() =>
+                    {
+                        if (DataContext is not PersonnelDashboardViewModel vm) return;
+
+                        if (entry.Dosyalar.Length > 0)
+                        {
+                            vm.EntryCameraImagePath = entry.Dosyalar[0];
+                            vm.EntryPhoto1 = entry.Dosyalar[0];
+                            if (entry.Dosyalar.Length > 1) vm.EntryPhoto2 = entry.Dosyalar[1];
+                        }
+
+                        if (exit.Dosyalar.Length > 0)
+                        {
+                            vm.ExitCameraImagePath = exit.Dosyalar[0];
+                            vm.ExitPhoto1 = exit.Dosyalar[0];
+                            if (exit.Dosyalar.Length > 1) vm.ExitPhoto2 = exit.Dosyalar[1];
+                        }
+
+                        if (logZamani)
+                        {
+                            Log($"UI: Entry={EntryCaptureFolder} ({entry.ToplamDosya} dosya) | " +
+                                $"Exit={ExitCaptureFolder} ({exit.ToplamDosya} dosya)");
+                            Log($"UI: EntryCam='{vm.EntryCameraImagePath}' | ExitCam='{vm.ExitCameraImagePath}'");
+                        }
+                    });
+                }
+                catch (Exception ex) { Log($"LoadLatestImages hata: {ex.Message}"); }
+                finally { _uiBusy = false; }
+            });
         }
 
         // ===== YARDIMCI =====
 
-        private static FileInfo? GetLatestImageFile(string folder)
+        /// <summary>
+        /// Klasordeki EN YENI n gorseli TEK taramada dondurur (yeniden eskiye).
+        ///
+        /// Siralama dosya ADINA gore yapilir: kamera dosyalari
+        /// "snap_yyyyMMdd_HHmmss_fff.jpg" formatinda oldugu icin metin sirasi = zaman sirasi.
+        /// Boylece dosya basina FileInfo/stat cagrisi tamamen ortadan kalkar (asil maliyet oydu).
+        ///
+        /// Tam siralama da yapilmaz; tek gecisle yalnizca en buyuk n ad tutulur.
+        /// </summary>
+        private static (string[] Dosyalar, int ToplamDosya) SonGorseller(string folder, int n)
         {
-            if (!Directory.Exists(folder)) return null;
-            return Directory.GetFiles(folder, "*.*")
-                .Where(IsImageFile)
-                .Select(p => new FileInfo(p))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
-                .FirstOrDefault();
+            if (!Directory.Exists(folder)) return (Array.Empty<string>(), 0);
+
+            string[] hepsi;
+            try { hepsi = Directory.GetFiles(folder, "*.*"); }
+            catch { return (Array.Empty<string>(), 0); }
+
+            // En buyuk n adi tutan kucuk liste (n=3, yani siralama maliyeti onemsiz)
+            var enYeniler = new List<string>(n + 1);
+            int gorselSayisi = 0;
+
+            foreach (var yol in hepsi)
+            {
+                if (!IsImageFile(yol)) continue;
+                gorselSayisi++;
+
+                var ad = Path.GetFileName(yol);
+                int i = 0;
+                while (i < enYeniler.Count &&
+                       string.CompareOrdinal(Path.GetFileName(enYeniler[i]), ad) > 0)
+                {
+                    i++;
+                }
+                if (i < n)
+                {
+                    enYeniler.Insert(i, yol);
+                    if (enYeniler.Count > n) enYeniler.RemoveAt(n);
+                }
+            }
+
+            return (enYeniler.ToArray(), gorselSayisi);
         }
 
-        private static string[] GetLatestImageFiles(string folder, int count)
+        /// <summary>Klasordeki en yeni gorsel (tek tarama, ada gore).</summary>
+        private static string? GetLatestImagePath(string folder)
         {
-            if (!Directory.Exists(folder)) return Array.Empty<string>();
-            return Directory.GetFiles(folder, "*.*")
-                .Where(IsImageFile)
-                .Select(p => new FileInfo(p))
-                .OrderByDescending(f => f.LastWriteTimeUtc)
-                .Take(count)
-                .Select(f => f.FullName)
-                .ToArray();
+            var (dosyalar, _) = SonGorseller(folder, 1);
+            return dosyalar.Length > 0 ? dosyalar[0] : null;
         }
 
         private static bool IsImageFile(string path)
@@ -1196,8 +1284,7 @@ namespace Otopark.Client.Views
                     source = recognizedImagePath;
                 else
                 {
-                    var latest = GetLatestImageFiles(captureFolder, 1);
-                    if (latest.Length > 0) source = latest[0];
+                    source = GetLatestImagePath(captureFolder);
                 }
 
                 if (source == null) return Array.Empty<string>();
