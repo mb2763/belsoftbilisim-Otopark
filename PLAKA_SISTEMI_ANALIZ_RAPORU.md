@@ -176,3 +176,42 @@ Günlük özet log/rapor: geçiş sayısı, otomatik kabul, şüpheli, okunamaya
 6. Kabul ölçütleri: (a) 46 doğru geçişin hepsi otomatik kabul, (b) 5 sorunlu geçişin hepsi şüpheli/insanlı, (c) boş koridorda sahte kabul 0, (d) kare süresi <300 ms.
 
 **Faz 0 (kamera açısı) yazılım dışı — sahada yapılacak; yazılım fazları onu beklemek zorunda değil.**
+
+---
+
+## 9. UYGULAMA DURUMU (06.08.2026 — tamamlandı)
+
+Faz 1, 2, 3, 5 koda uygulandı ve aynı 1388 kare üzerinde regresyon testi yapıldı.
+
+### Uygulanan değişiklikler
+
+| Faz | Dosya | Değişiklik |
+|---|---|---|
+| 1 | `Helpers/OnnxPlateOcr.cs` | Çifte softmax kaldırıldı; çıktının olasılık mı logit mi olduğu **otomatik algılanıyor** (satır toplamı ~1.0 → olasılık). Dönüş tipi `PlateOcrResult` (Plate, Score, **MinCharProb**, RegionId, RegionProb). İkinci çıktı (`region`) artık okunuyor. |
+| 1 | `Helpers/LocalPlateRecognizer.cs` | Yapay skor takviyeleri (+0.55 / +0.05 / +0.03) **kaldırıldı**; güven doğrudan `MinCharProb`. `GuvenEsigi = 0.90` sabiti. `Candidate`'e MinCharProb/RegionId/Kenarda eklendi. |
+| 1 | `Helpers/LocalPlateRecognizer.cs` | **Kenar teması kuralı**: `KenardaMi()` — kutu kare kenarına ≤6 px ise `Supheli`. `DetectPlateRegions` artık `PlateRegion(Mat, bool Kenarda)` döndürüyor. |
+| 1 | `Helpers/LocalPlateRecognizer.cs` | Tesseract tetikleme koşulu "geçerli TR yok" → **"emin okuma yok"** (`MinCharProb >= 0.90`). Yabancı plakada gereksiz Tesseract çağrısı bitti. |
+| 2 | `Views/PersonnelDashboardView.xaml.cs` | `OkumaSonucu` kaydı; **`supheli` ise `autoApprove = false`**. Personele toast: "PLAKAYI DOĞRULAYIN: {plaka} ({sebep})". ROI tetikleyicisi `Score < 0.80` → **`Supheli`** (eski koşul skor 0.90'a sabitlendiğinden hiç çalışmıyordu). |
+| 3 | `Helpers/LocalPlateRecognizer.cs` | TR karakter düzeltmesi (`CorrectPlateFormat`) **yalnız RegionId=60 iken** uygulanıyor. |
+| 5 | `Helpers/PlakaIstatistik.cs` (yeni) | Günlük özet → `C:\Otopark\plaka_ozet.log`. Kenarda oranı ≥%25 ise **"KAMERA AÇISINI KONTROL EDİN"** uyarısı. |
+
+### Rapordan bilinçli sapma — tek madde
+
+Faz 1.2 "`minCharProb < 0.90` → skor tavanı **0.89** (stabilizer 2-kare doğrulaması ister)" diyordu. **Uygulanmadı**, çünkü ölçülen veride 51 geçişin **34'ü tek kareli**; 0.89'a çekmek o araçların stabilizer'da takılıp **tamamen kaybolmasına** yol açardı (örn. 16:09:39 geçişinin tek karesi var). Bu, raporun kendi hedefiyle ("kaçan araç kalmaz") ve kullanıcının birinci şartıyla çelişiyordu.
+
+Bunun yerine: **okuma her zaman tek karede yukarı verilir, şüpheliler yalnızca OTOMATİK ONAYA girmez.** Sonuç aynı (emin → otomatik, emin değil → insanlı), araç kaybı yok. Ayrıca ölçüldü: sorunlu 5 geçişin hiçbirinde plakası tam görünen alternatif kare yoktu — yani 2-kare beklemenin kazandıracağı bir şey de yoktu.
+
+### Regresyon sonucu (1388 kare / 51 geçiş)
+
+| Kabul ölçütü | Hedef | Sonuç |
+|---|---|---|
+| (a) Doğru geçişler otomatik kabul | 46 | **43 otomatik** + 3 doğru ama kenarda olduğu için şüpheli |
+| (b) Sorunlu 5 geçiş şüpheli/insanlı | 5/5 | **5/5** ✓ |
+| (c) Boş koridorda sahte kabul | 0 | **0** (1209 boş kare) ✓ |
+| (d) Kare süresi | <300 ms | **ort. 83 ms**, medyan 73, en kötü 172 ✓ |
+
+Güven ayrışması sahada da doğrulandı: otomatik kabul edilen 43 okumanın hepsi **minKarakter ≥ 0.995**; şüpheli işaretlenen hatalıların hepsi **0.32 – 0.70**.
+
+`region` çıktısı çalışıyor: TR=60, Fransa=21, Hollanda=43, Avusturya=5, Almanya=23, Belçika=9.
+
+**Maliyet:** kenara değen 10 geçişin 5'i aslında doğruydu ama şüpheli işaretlendi → 51 geçişte ~5 gereksiz personel onayı (%10). Hataların %100'ünü yakalamanın bedeli bu. **Faz 0 (kamera açısı) yapılırsa bu maliyet de sıfırlanır.**

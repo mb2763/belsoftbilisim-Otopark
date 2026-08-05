@@ -300,6 +300,9 @@ namespace Otopark.Client.Views
 
         private void Stop()
         {
+            // FAZ 5: biriken gunluk ozet kaybolmasin (gun icinde kapanirsa da yazilir)
+            try { Otopark.Client.Helpers.PlakaIstatistik.Bitir(); } catch { }
+
             try
             {
                 _uiTimer.Stop();
@@ -485,8 +488,11 @@ namespace Otopark.Client.Views
                 long msTam = _swTam.ElapsedMilliseconds;
                 long msRoi = 0;
 
-                // 2) ROI kirpma: skor < 0.80 veya sonuc yoksa her zaman dene
-                if (best == null || best.Value.Score < 0.80)
+                // 2) ROI kirpma: sonuc yoksa VEYA okuma SUPHELI ise dene.
+                //    (Eskiden olcut "skor < 0.80" idi; skor artik tek-kare kabul icin
+                //     0.90'a sabitlendiginden o kosul hicbir zaman saglanmiyordu.
+                //     Dogru olcut guven: model emin degilse kirpilmis goruntuyu de dene.)
+                if (best == null || best.Value.Supheli)
                 {
                     var _swRoi = System.Diagnostics.Stopwatch.StartNew();
                     double xp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:XPercent"],
@@ -502,9 +508,17 @@ namespace Otopark.Client.Views
                     if (!string.Equals(cropped, imagePath, StringComparison.OrdinalIgnoreCase))
                     {
                         var roiBest = await RecognizeWithScoreAsync(cropped, ct);
-                        if (roiBest != null && (best == null || roiBest.Value.Score > best.Value.Score))
+                        // ROI sonucu ancak DAHA GUVENILIR ise tercih edilir:
+                        // once "supheli degil" ustunlugu, esitse daha yuksek min-karakter guveni.
+                        bool roiDahaIyi = roiBest != null && (
+                            best == null
+                            || (best.Value.Supheli && !roiBest.Value.Supheli)
+                            || (best.Value.Supheli == roiBest.Value.Supheli
+                                && roiBest.Value.MinChar > best.Value.MinChar));
+                        if (roiDahaIyi)
                         {
-                            Log($"[{side}] ROI daha iyi: {(best?.Score ?? 0):F2} -> {roiBest.Value.Score:F2}");
+                            Log($"[{side}] ROI daha iyi: minKar {(best?.MinChar ?? 0):F2} -> {roiBest!.Value.MinChar:F2} " +
+                                $"(supheli {(best?.Supheli ?? true)} -> {roiBest.Value.Supheli})");
                             best = roiBest;
                         }
                     }
@@ -519,6 +533,7 @@ namespace Otopark.Client.Views
 
                 string plate = best.Value.Plate;
                 double score = best.Value.Score;
+                bool supheli = best.Value.Supheli;
 
                 // FORMAT KONTROLU ARTIK RED SEBEBI DEGIL — YALNIZCA BILGI.
                 //
@@ -600,12 +615,40 @@ namespace Otopark.Client.Views
                     ? !string.Equals(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Entry"], "false", StringComparison.OrdinalIgnoreCase)
                     : !string.Equals(Otopark.Core.Services.AppConfig.Configuration["AutoApprove:Exit"], "false", StringComparison.OrdinalIgnoreCase);
 
+                // ===== FAZ 2: GUVEN KAPISI =====
+                // SUPHELI okuma otomatik onaya GIRMEZ. Plaka ve fotograf ekrana yine gelir,
+                // personel gozuyle dogrulayip onaylar (ya da Plaka Duzelt ile duzeltir).
+                //
+                // Neden: 51 arac gecisi uzerinde olculdu ->
+                //   model emin oldugunda (minKarakter >= 0.90) 46/46 DOGRU,
+                //   emin olmadiginda (0.23-0.70) okumalarin cogu YANLIS.
+                // Yani "supheli" isareti hatanin neredeyse tamamini yakaliyor.
+                // Arac KACMIYOR - sadece otomatik degil, personel onayli giriyor.
+                if (supheli && autoApprove)
+                {
+                    autoApprove = false;
+                    Log($"[{side}] OTO-ONAY KAPATILDI (supheli okuma): '{stable.Plate}' " +
+                        $"minKarakter={best.Value.MinChar:F2} kenarda={best.Value.Kenarda} " +
+                        $"-> personel dogrulamasi bekleniyor");
+                }
+
                 await Dispatcher.InvokeAsync(async () =>
                 {
                     if (DataContext is not PersonnelDashboardViewModel vm)
                     {
                         Log($"[{side}] OTO-ONAY iptal: DataContext bos");
                         return;
+                    }
+
+                    // Personel supheli okumayi FARK ETMELI: plaka ekranda ama otomatik
+                    // onaylanmadi. Sebebini de yaz ki ne yapacagini bilsin.
+                    if (supheli)
+                    {
+                        string sebep = best.Value.Kenarda
+                            ? "plaka kare kenarinda yarim kalmis"
+                            : $"okuma guveni dusuk ({best.Value.MinChar:F2})";
+                        vm.ShowBarrierToast(false,
+                            $"{(isEntry ? "GIRIS" : "CIKIS")} - PLAKAYI DOGRULAYIN: {stable.Plate}  ({sebep})");
                     }
 
                     if (isEntry)
@@ -667,8 +710,15 @@ namespace Otopark.Client.Views
             catch (Exception ex) { Log($"[{side}] Detect hata: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// Tek kareden plaka okuma sonucu.
+        /// Supheli=true ise okuma OTOMATIK ONAYA GIRMEZ; personel dogrular.
+        /// </summary>
+        private readonly record struct OkumaSonucu(
+            string Plate, double Score, bool Supheli, double MinChar, bool Kenarda);
+
         // LOCAL-FIRST mod: Once lokal OCR'i dene, yetmezse API'ye gec (kota tasarrufu)
-        private async Task<(string Plate, double Score)?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
+        private async Task<OkumaSonucu?> RecognizeWithScoreAsync(string imagePath, CancellationToken ct)
         {
             // 1) Lokal multi-engine motor (ONNX YOLO + ONNX OCR + Tesseract+Haar) - tamamen ucretsiz.
             //    LocalPlateRecognizer 70 ulke format kutuphanesine karsi dogrulanmis sonuc dondurur.
@@ -685,7 +735,10 @@ namespace Otopark.Client.Views
                     // Bilinen formata uymasa da KABUL (yabanci plaka). Onceden burada
                     // eleniyor ve bulut API'ye dusuluyordu; bulut da kapaliysa arac kaciyordu.
                     if (normalized.Length >= 5)
-                        return (normalized, localResult.Score);
+                    {
+                        return new OkumaSonucu(normalized, localResult.Score,
+                            localResult.Supheli, localResult.MinCharProb, localResult.Kenarda);
+                    }
                 }
             }
 
@@ -710,7 +763,9 @@ namespace Otopark.Client.Views
                 if (r != null && !string.IsNullOrWhiteSpace(r.Plate))
                 {
                     var plate = PlateRules.Normalize(r.Plate);
-                    return (plate, r.Score);
+                    // Buluttan gelen okuma: buraya zaten lokal motorun okuyamadigi zor
+                    // kareler dusuyor, o yuzden DAIMA supheli isaretlenir (personel dogrular).
+                    return new OkumaSonucu(plate, r.Score, true, r.Score, false);
                 }
             }
             catch (Exception ex)
@@ -722,7 +777,8 @@ namespace Otopark.Client.Views
             if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
             {
                 var normalized = PlateRules.Normalize(localResult.Plate);
-                return (normalized, localResult.Score);
+                return new OkumaSonucu(normalized, localResult.Score,
+                    localResult.Supheli, localResult.MinCharProb, localResult.Kenarda);
             }
 
             return null;

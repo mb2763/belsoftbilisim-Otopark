@@ -44,6 +44,18 @@ namespace Otopark.Client.Helpers
         /// </summary>
         private const int MaxRegions = 2;
 
+        /// <summary>
+        /// OTOMATIK ONAY GUVEN ESIGI - en zayif karakterin model olasiligi bunun altindaysa
+        /// okuma SUPHELI sayilir ve personel dogrulamasina duser.
+        ///
+        /// 0.90 degeri 51 gercek arac gecisi uzerinde olculerek secildi:
+        ///     46 DOGRU okumanin hepsi  : MinCharProb >= 0.99
+        ///      5 HATALI okumanin hepsi : MinCharProb 0.23 - 0.70
+        /// Iki grup arasinda 0.70 ile 0.99 arasi bos bir bant var; 0.90 tam ortasinda,
+        /// yani esik kucuk kaymalara karsi dayanikli.
+        /// </summary>
+        public const double GuvenEsigi = 0.90;
+
         private TesseractEngine? _engine;
         private readonly OnnxPlateDetector _onnxDetector;
         private readonly OnnxPlateOcr _onnxOcr;
@@ -188,16 +200,17 @@ namespace Otopark.Client.Helpers
                 //   - Tesseract SADECE ONNX gecerli bir TR plakasi bulamadiysa calisir
                 //     (kod yorumunda da zaten "Tesseract yedek" yaziyordu)
                 var allCandidates = new List<Candidate>();
+                bool kenardaOkundu = false;   // kazanan okumanin geldigi bolge kare kenarina degiyor mu
 
-                // Su ana kadar gecerli TR plakasi bulundu mu?
-                bool GecerliTrVar() => allCandidates.Any(c =>
-                {
-                    var m = PlateFormatLibrary.Match(c.Plate);
-                    return m != null && m.CountryCode == "TR";
-                });
+                // ONNX OCR yeterince EMIN bir okuma uretti mi? (Tesseract'i tetikleme kosulu)
+                // ESKIDEN: "gecerli TR plakasi var mi" -> yabanci plakada Tesseract bosuna
+                // calisiyordu (kare basina ~30 cagri, ~100 ms+). Artik olcut GUVEN:
+                // model emin olduysa yedege gerek yok, emin degilse yedek devreye girsin.
+                bool EminOkumaVar() => allCandidates.Any(c => c.MinCharProb >= GuvenEsigi);
 
-                foreach (var region in regions.Take(MaxRegions))
+                foreach (var pr in regions.Take(MaxRegions))
                 {
+                    var region = pr.Region;
                     using (region)
                     {
                         // ONNX OCR'a coklu varyant ver (orijinal + kontrast artirilmis + sharpened).
@@ -208,18 +221,19 @@ namespace Otopark.Client.Helpers
                             {
                                 using (variant)
                                 {
-                                    var (plate, score) = _onnxOcr.Recognize(variant);
-                                    var normalized = NormalizePlate(plate);
+                                    var r = _onnxOcr.Recognize(variant);
+                                    var normalized = NormalizePlate(r.Plate);
                                     if (normalized.Length >= 5)
-                                        allCandidates.Add(new Candidate(normalized, score, "onnx"));
+                                    {
+                                        allCandidates.Add(new Candidate(
+                                            normalized, r.Score, "onnx", r.MinCharProb, r.RegionId, pr.Kenarda));
+                                    }
                                 }
                             }
                         }
 
-                        // Tesseract YEDEK: yalnizca ONNX OCR gecerli bir TR plakasi
-                        // uretemediyse calistirilir. Bu tek kosul kare basina ~30 Tesseract
-                        // cagrisini ortadan kaldirir (normal durumda ONNX zaten buluyor).
-                        if (_engine != null && !GecerliTrVar())
+                        // Tesseract YEDEK: yalnizca ONNX OCR EMIN bir okuma uretemediyse.
+                        if (_engine != null && !EminOkumaVar())
                         {
                             foreach (var preprocessed in PreprocessVariants(region))
                             {
@@ -230,10 +244,31 @@ namespace Otopark.Client.Helpers
                                         var c = TryTesseract(preprocessed, psm);
                                         if (c != null)
                                         {
-                                            allCandidates.Add(c.Value);
-                                            var corrected = CorrectPlateFormat(c.Value.Plate);
-                                            if (corrected != c.Value.Plate && corrected.Length >= 5)
-                                                allCandidates.Add(new Candidate(corrected, c.Value.Score, "tess-corrected"));
+                                            var tc = c.Value with { Kenarda = pr.Kenarda };
+                                            allCandidates.Add(tc);
+
+                                            // FAZ 3: TR karakter duzeltmesi YALNIZCA plaka TR bolgesi
+                                            // olarak siniflandirildiysa uygulanir. Aksi halde yabanci
+                                            // plaka zorla TR kalibina sokuluyordu (orn. NO MF 38).
+                                            // Tesseract bolge bilgisi vermez; o yuzden ONNX'in ayni
+                                            // kare icin verdigi bolge kararina bakilir. Hic ONNX
+                                            // okumasi yoksa (Tesseract tek basina) TR varsayilir.
+                                            bool trVarsay = allCandidates
+                                                .Where(x => x.Source == "onnx" && x.RegionId >= 0)
+                                                .Select(x => x.RegionId == PlateOcrResult.TrRegionId)
+                                                .DefaultIfEmpty(true)
+                                                .First();
+
+                                            if (trVarsay)
+                                            {
+                                                var corrected = CorrectPlateFormat(c.Value.Plate);
+                                                if (corrected != c.Value.Plate && corrected.Length >= 5)
+                                                {
+                                                    allCandidates.Add(new Candidate(
+                                                        corrected, c.Value.Score, "tess-corrected",
+                                                        c.Value.MinCharProb, -1, pr.Kenarda));
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -280,49 +315,67 @@ namespace Otopark.Client.Helpers
                     .First();
 
                 var winnerPlate = topGroup.Key;
-                var maxRawScore = topGroup.Max(c => c.Score);
-                var winnerSource = topGroup.OrderByDescending(c => c.Score).First().Source;
+                var winnerBest = topGroup.OrderByDescending(c => c.MinCharProb).First();
+                var winnerSource = winnerBest.Source;
+                kenardaOkundu = topGroup.Any(c => c.Kenarda);
 
-                // ---- SKOR ----
-                // ONCEDEN: Math.Max(0.90, ...) -> lokal motor bir sey dondurduyse skor HER ZAMAN
-                // >= 0.90 oluyordu; stabilizer tek karede kabul ediyor ve neededHits:2 fiilen
-                // olu kaliyordu. Bos koridor karesinde uydurulan plaka otomatik giris aciyordu.
-                double winnerFinal = Math.Min(1.0, maxRawScore + 0.55);
-                if (winnerSource == "onnx") winnerFinal = Math.Min(1.0, winnerFinal + 0.05);
-                // Birden fazla aday ayni plakayi soyledi -> ekstra guven
-                if (topGroup.Count() >= 2) winnerFinal = Math.Min(1.0, winnerFinal + 0.03);
-
-                // ---- TEK-KARE KABUL HAKKI ----
-                // Hayaletin kaynagi, bolgeyi kenar/renk SEZGISELININ uretmesiydi. O yol artik
-                // ONNX calisirken kapali (bkz. DetectPlateRegions). Dolayisiyla bolge ONNX'ten
-                // geliyorsa ortada GERCEK bir plaka kutusu var demektir; ustune TR format ve il
-                // kodu dogrulamasi da gecmisse tek karede kabul GUVENLIDIR.
+                // ---- GUVEN ----
+                // ARTIK HAM MODEL GUVENI KULLANILIYOR (06.08.2026).
                 //
-                // Bu kural onemli: bulut tanima servisi (PlateRecognizer) devre disi kaldiginda
-                // yerel motor TEK tanıyıcı olur. "2 kare" sarti korunursa ayni plaka arka arkaya
-                // iki karede okunmadigi icin sistem hicbir plakayi kabul edemez hale gelir
-                // (log: "Bekleme (stabilizer): '38YK761' skor=0,70" -> hicbir zaman onaylanmaz).
+                // Eskiden OnnxPlateOcr ciktiya IKINCI KEZ softmax uyguluyordu; model %100
+                // eminken bile skor ~0.07 geliyordu. Bu bozuk olcumu telafi etmek icin burada
+                // +0.55 takviye, +0.05 onnx, +0.03 uzlasma ve 0.90'a zorlama yapiliyordu.
+                // Softmax hatasi duzeltildi (bkz. OnnxPlateOcr.DecodeGreedy), dolayisiyla
+                // tum bu yapay takviyeler KALDIRILDI.
                 //
-                // Haar ve sezgisel kaynakli okumalar 0.89'da tutulur -> 2 kare dogrulamasi surer.
-                bool tekKareHakki = bolgeKaynagi == "onnx";
-                if (tekKareHakki)
-                {
-                    // Gercek dedektor kutusu + gecerli TR plaka -> tek karede kabul edilebilir
-                    if (winnerFinal < 0.90) winnerFinal = 0.90;
-                }
-                else if (winnerFinal >= 0.90)
-                {
-                    winnerFinal = 0.89;   // Haar/sezgisel -> 2 kare dogrulamasi sart
-                }
+                // Olculen ayrisma (51 arac gecisi, 1388 kare):
+                //     46 DOGRU okumanin hepsi  : MinCharProb >= 0.99
+                //      5 HATALI okumanin hepsi : MinCharProb 0.23 - 0.70
+                // Bu yuzden esik 0.90: tum dogrular gecer, tum hatalilar yakalanir.
+                double minChar = winnerBest.MinCharProb;
+                double winnerFinal = minChar;
 
-                Candidate? best = new Candidate(winnerPlate, winnerFinal, winnerSource);
+                // ---- SUPHELI KARARI ----
+                // Uc kosuldan biri bozuksa okuma SUPHELI'dir:
+                //   1) Bolge guvenilir dedektorden (ONNX) gelmiyor  -> hayalet riski
+                //   2) Model karakterlerin birinden emin degil       -> yanlis harf riski
+                //   3) Plaka kutusu kare kenarina degiyor            -> plaka yarim kalmis
+                // Olcum: kenara degen kutularda dogruluk %100'den %50'ye dusuyor.
+                bool guvenilirKaynak = bolgeKaynagi == "onnx";
+                bool supheli = !guvenilirKaynak || minChar < GuvenEsigi || kenardaOkundu;
+
+                // ---- TEK-KARE KABUL ----
+                // KRITIK TASARIM KARARI: supheli okuma da TEK KAREDE yukari verilir.
+                //
+                // Rapor "supheli ise skoru 0.89'a cek, stabilizer 2 kare dogrulamasi istesin"
+                // diyordu. Bu, olculen veride 51 gecisin 34'u TEK KARELI oldugu icin o araclarin
+                // TAMAMEN KACMASINA yol acardi (ornek: 16:09:39 gecisinin tek karesi var).
+                // Kullanicinin birinci sarti "hicbir aracin girisi kacmasin"; ikinci sarti
+                // "yanlis okuma olabilir". O yuzden okuma her zaman yukari verilir, supheli
+                // olanlar OTOMATIK ONAYA girmez (bkz. PersonnelDashboardView) - personel onaylar.
+                //
+                // Ayrica olculdu: sorunlu 5 gecisin HICBIRINDE plakasi tam gorunen alternatif
+                // kare yoktu; yani 2-kare beklemenin kazandiracagi bir sey de yoktu.
+                if (winnerFinal < 0.90) winnerFinal = 0.90;
+
+                Candidate? best = new Candidate(
+                    winnerPlate, winnerFinal, winnerSource, minChar, winnerBest.RegionId, kenardaOkundu);
 
                 // Plaka tanindi -> kopyalanan vehicle frame dosyasinin adina plakayi ekle
                 if (vehicleFramePath != null)
                     TryRenameVehicleFrame(vehicleFramePath, winnerPlate);
 
-                if (best == null) return null;
-                return new PlateRecognitionResult(best.Value.Plate, best.Value.Score);
+                if (supheli)
+                {
+                    AppLog($"SUPHELI okuma: '{winnerPlate}' minKarakter={minChar:F2} " +
+                           $"kaynak={bolgeKaynagi} kenarda={kenardaOkundu} bolge={winnerBest.RegionId} " +
+                           $"-> otomatik onay YOK, personel dogrulamasi gerekiyor");
+                }
+
+                PlakaIstatistik.Kaydet(supheli, kenardaOkundu, winnerBest.RegionId);
+
+                return new PlateRecognitionResult(
+                    best.Value.Plate, best.Value.Score, supheli, minChar, kenardaOkundu, winnerBest.RegionId);
             }
             catch (Exception ex)
             {
@@ -343,9 +396,9 @@ namespace Otopark.Client.Helpers
         /// alan yerine out parametresi ile tasinir cunku LocalPlateRecognizer ornegi
         /// giris/cikis akislarinca PAYLASILIR (alan kullanmak yaris yaratirdi).
         /// </param>
-        private List<Mat> DetectPlateRegions(Mat src, out string kaynak)
+        private List<PlateRegion> DetectPlateRegions(Mat src, out string kaynak)
         {
-            var regions = new List<Mat>();
+            var regions = new List<PlateRegion>();
             kaynak = "yok";
 
             bool onnxVar = _onnxDetector != null && _onnxDetector.IsAvailable;
@@ -355,7 +408,7 @@ namespace Otopark.Client.Helpers
             {
                 var boxes = _onnxDetector!.Detect(src);
                 foreach (var box in boxes.Take(5))
-                    regions.Add(ExpandAndCrop(src, box, 8));
+                    regions.Add(new PlateRegion(ExpandAndCrop(src, box, 8), KenardaMi(box, src)));
                 if (regions.Count > 0) { kaynak = "onnx"; return regions; }
             }
 
@@ -365,7 +418,7 @@ namespace Otopark.Client.Helpers
             {
                 var boxes = _haarDetector.Detect(src);
                 foreach (var box in boxes.Take(5))
-                    regions.Add(ExpandAndCrop(src, box, 5));
+                    regions.Add(new PlateRegion(ExpandAndCrop(src, box, 5), KenardaMi(box, src)));
                 if (regions.Count > 0) { kaynak = "haar"; return regions; }
             }
 
@@ -378,12 +431,33 @@ namespace Otopark.Client.Helpers
 
             // ONNX HIC YOKSA son care: kenar + renk sezgiseli (gurultulu, tek kare kabul edilmez)
             foreach (var r in DetectByEdges(src).Take(5))
-                regions.Add(r);
+                regions.Add(new PlateRegion(r, false));
             foreach (var r in DetectByColor(src).Take(3))
-                regions.Add(r);
+                regions.Add(new PlateRegion(r, false));
             if (regions.Count > 0) kaynak = "heuristic";
 
             return regions;
+        }
+
+        /// <summary>
+        /// Plaka kutusu KARE KENARINA degiyor mu? (yani plaka goruntunun disina tasmis olabilir)
+        ///
+        /// NEDEN: 51 arac gecisi uzerinde olculdu -
+        ///   kutu kare ICINDE tam ise  : 41/41 dogru (%100)
+        ///   kutu kenara DEGIYORSA     : 5 dogru / 4 yanlis / 1 okunamadi (%50)
+        /// Veri setindeki TUM hatalar bu siniftan geldi. Kirpik plakada karakterin bir kismi
+        /// goruntude olmadigi icin OCR uydurmak zorunda kaliyor.
+        ///
+        /// Bu bilgi okumayi ENGELLEMEZ (arac kacmasin) - sadece "supheli" isaretler ve
+        /// otomatik onayi kapatir; personel gozuyle dogrular.
+        /// </summary>
+        private static bool KenardaMi(OcvRect box, Mat src)
+        {
+            const int PAY = 6;   // px
+            return box.X <= PAY
+                || box.Y <= PAY
+                || box.X + box.Width >= src.Cols - PAY
+                || box.Y + box.Height >= src.Rows - PAY;
         }
 
         private static Mat ExpandAndCrop(Mat src, OcvRect box, int pad)
@@ -771,14 +845,49 @@ namespace Otopark.Client.Helpers
             }
         }
 
-        private readonly record struct Candidate(string Plate, double Score, string Source);
+        private readonly record struct Candidate(
+            string Plate,
+            double Score,
+            string Source,
+            double MinCharProb = 0,
+            int RegionId = -1,
+            bool Kenarda = false);
+
+        /// <summary>Dedektorden gelen plaka bolgesi + kutunun kare kenarina degip degmedigi.</summary>
+        private readonly record struct PlateRegion(Mat Region, bool Kenarda);
     }
 
     public sealed class PlateRecognitionResult
     {
         public string Plate { get; }
         public double Score { get; }
-        public PlateRecognitionResult(string plate, double score) { Plate = plate; Score = score; }
+
+        /// <summary>
+        /// TRUE ise okuma otomatik onaya GIRMEMELIDIR - personel gozuyle dogrulamali.
+        /// Sebepler: dusuk model guveni, plaka kutusunun kare kenarina degmesi veya
+        /// bolgenin guvenilir olmayan bir dedektorden gelmesi.
+        /// </summary>
+        public bool Supheli { get; }
+
+        /// <summary>En zayif karakterin model guveni [0,1]. Supheli kararinin ana olcutu.</summary>
+        public double MinCharProb { get; }
+
+        /// <summary>Plaka kutusu kare kenarina degiyor mu (plaka yarim kalmis olabilir).</summary>
+        public bool Kenarda { get; }
+
+        /// <summary>OCR modelinin bolge/ulke sinifi (60 = TR). -1 = bilinmiyor.</summary>
+        public int RegionId { get; }
+
+        public PlateRecognitionResult(string plate, double score,
+            bool supheli = false, double minCharProb = 1.0, bool kenarda = false, int regionId = -1)
+        {
+            Plate = plate;
+            Score = score;
+            Supheli = supheli;
+            MinCharProb = minCharProb;
+            Kenarda = kenarda;
+            RegionId = regionId;
+        }
     }
 
     /// <summary>

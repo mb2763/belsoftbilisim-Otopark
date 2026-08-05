@@ -10,6 +10,24 @@ using System.Text;
 namespace Otopark.Client.Helpers
 {
     /// <summary>
+    /// ONNX OCR tek okuma sonucu.
+    /// </summary>
+    internal readonly record struct PlateOcrResult(
+        string Plate,
+        double Score,
+        double MinCharProb,
+        int RegionId,
+        double RegionProb)
+    {
+        public static readonly PlateOcrResult Bos = new("", 0, 0, -1, 0);
+
+        /// <summary>fast-plate-ocr global modelinde gozlemlenen TR bolge sinifi.</summary>
+        public const int TrRegionId = 60;
+
+        public bool TrBolgesi => RegionId == TrRegionId;
+    }
+
+    /// <summary>
     /// FastPlateOCR-uyumlu ONNX modeli ile plaka karakter tanima.
     /// Apache 2.0 acik kaynak modellerle calisir (ankandrew/fast-plate-ocr).
     ///
@@ -79,11 +97,13 @@ namespace Otopark.Client.Helpers
 
         /// <summary>
         /// Verilen plaka bolgesinden karakter dizisi okur. Bos string = okuyamadi.
-        /// Score: [0,1] arasi ortalama softmax confidence.
+        /// Score        : karakter guvenlerinin ORTALAMASI [0,1]
+        /// MinCharProb  : EN ZAYIF karakterin guveni [0,1]  <-- guven kapisinda bu kullanilir
+        /// RegionId     : modelin ikinci ciktisi (ulke/bolge sinifi), -1 = okunamadi
         /// </summary>
-        public (string Plate, double Score) Recognize(Mat plateRegion)
+        public PlateOcrResult Recognize(Mat plateRegion)
         {
-            if (_session == null || plateRegion.Empty()) return ("", 0);
+            if (_session == null || plateRegion.Empty()) return PlateOcrResult.Bos;
 
             try
             {
@@ -115,14 +135,41 @@ namespace Otopark.Client.Helpers
 
                 var inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, tensor) };
                 using var results = _session.Run(inputs);
-                var output = results.First().AsTensor<float>();
 
-                return DecodeGreedy(output);
+                // Model IKI cikti veriyor:
+                //   "plate"  [N, 10, 37] -> karakter olasiliklari
+                //   "region" [N, 66]     -> ulke/bolge sinifi (FAZ 3'te kullanilir)
+                Tensor<float>? plateOut = null, regionOut = null;
+                foreach (var r in results)
+                {
+                    var t = r.AsTensor<float>();
+                    if (t.Dimensions.Length == 3) plateOut ??= t;        // [N,T,C]
+                    else if (t.Dimensions.Length == 2 && t.Dimensions[1] > 40) regionOut ??= t;
+                    else plateOut ??= t;                                  // [N,T*C] duzlestirilmis
+                }
+                if (plateOut == null) return PlateOcrResult.Bos;
+
+                var (plate, score, minProb) = DecodeGreedy(plateOut);
+                int regionId = -1;
+                double regionProb = 0;
+                if (regionOut != null && regionOut.Dimensions.Length == 2)
+                {
+                    int n = regionOut.Dimensions[1];
+                    float en = float.MinValue;
+                    for (int i = 0; i < n; i++)
+                    {
+                        float v = regionOut[0, i];
+                        if (v > en) { en = v; regionId = i; }
+                    }
+                    regionProb = en;
+                }
+
+                return new PlateOcrResult(plate, score, minProb, regionId, regionProb);
             }
             catch (Exception ex)
             {
                 AppLog($"ONNX OCR inference hata: {ex.Message}");
-                return ("", 0);
+                return PlateOcrResult.Bos;
             }
         }
 
@@ -165,10 +212,30 @@ namespace Otopark.Client.Helpers
             return tensor;
         }
 
-        private static (string Plate, double Score) DecodeGreedy(Tensor<float> output)
+        /// <summary>
+        /// Greedy cozumleme.
+        ///
+        /// ONEMLI DUZELTME (06.08.2026) - CIFTE SOFTMAX:
+        /// Bu dosyanin eski basligi "Output: logits" diyordu ve asagida ciktiya softmax
+        /// uygulaniyordu. Kullandigimiz model (fast-plate-ocr cct_s_v2_global) ciktiyi
+        /// ZATEN SOFTMAX'LANMIS veriyor - olculdu: her zaman dilimi satirinin toplami 1.000.
+        /// Uzerine ikinci kez softmax uygulaninca model %100 eminken bile skor
+        ///     exp(0) / (exp(0) + 36*exp(-1)) ~= 0.07
+        /// cikiyordu. Tum guven zinciri (LocalPlateRecognizer'daki +0.55 takviye ve
+        /// 0.90'a zorlama) bu bozuk olcumu telafi etmek icin kurulmustu.
+        ///
+        /// Ham olasiliklarla olculen ayrisma (51 arac gecisi):
+        ///     46 DOGRU okumanin hepsi  : min karakter guveni >= 0.99
+        ///      5 HATALI okumanin hepsi : 0.23 - 0.70
+        /// Yani min-karakter guveni tek basina hatayi kusursuz ayirt ediyor.
+        ///
+        /// Model degisirse diye ciktinin olasilik mi logit mi oldugu OTOMATIK algilanir:
+        /// satir toplami ~1.0 ise olasilik kabul edilir, degilse softmax uygulanir.
+        /// </summary>
+        private static (string Plate, double Score, double MinCharProb) DecodeGreedy(Tensor<float> output)
         {
             var dims = output.Dimensions;
-            if (dims.Length < 2) return ("", 0);
+            if (dims.Length < 2) return ("", 0, 0);
 
             int seqLen, numClasses;
             if (dims.Length == 3)
@@ -183,39 +250,65 @@ namespace Otopark.Client.Helpers
                 seqLen = MaxPlateLength;
                 numClasses = dims[1] / seqLen;
             }
-            else return ("", 0);
+            else return ("", 0, 0);
 
-            if (numClasses == 0 || seqLen == 0) return ("", 0);
+            if (numClasses == 0 || seqLen == 0) return ("", 0, 0);
+
+            // dims bir 'ref local' oldugu icin lambda icinde kullanilamaz -> kopyala
+            int rank = dims.Length;
+            int sinifSayisi = numClasses;
+            float Deger(int t, int c) => rank == 3 ? output[0, t, c] : output[0, t * sinifSayisi + c];
+
+            // --- Cikti olasilik mi, logit mi? Ilk zaman diliminin toplamina bak. ---
+            float ilkToplam = 0f;
+            bool negatifVar = false;
+            for (int c = 0; c < numClasses; c++)
+            {
+                float v = Deger(0, c);
+                ilkToplam += v;
+                if (v < -0.0001f) negatifVar = true;
+            }
+            bool olasilikCiktisi = !negatifVar && Math.Abs(ilkToplam - 1f) < 0.02f;
 
             var sb = new StringBuilder();
             double scoreSum = 0;
+            double minProb = 1.0;
             int scoreCount = 0;
 
             for (int t = 0; t < seqLen; t++)
             {
-                // Softmax + argmax (numerik stabil)
-                float maxLogit = float.MinValue;
-                for (int c = 0; c < numClasses; c++)
-                {
-                    float v = dims.Length == 3 ? output[0, t, c] : output[0, t * numClasses + c];
-                    if (v > maxLogit) maxLogit = v;
-                }
-
-                float sumExp = 0f;
                 int bestIdx = 0;
-                float bestProb = 0f;
-                for (int c = 0; c < numClasses; c++)
+                float prob;
+
+                if (olasilikCiktisi)
                 {
-                    float v = dims.Length == 3 ? output[0, t, c] : output[0, t * numClasses + c];
-                    float e = MathF.Exp(v - maxLogit);
-                    sumExp += e;
-                    if (e > bestProb)
+                    // Dogrudan olasilik: sadece argmax
+                    float best = float.MinValue;
+                    for (int c = 0; c < numClasses; c++)
                     {
-                        bestProb = e;
-                        bestIdx = c;
+                        float v = Deger(t, c);
+                        if (v > best) { best = v; bestIdx = c; }
                     }
+                    prob = Math.Clamp(best, 0f, 1f);
                 }
-                float prob = sumExp > 0 ? bestProb / sumExp : 0f;
+                else
+                {
+                    // Logit: numerik stabil softmax
+                    float maxLogit = float.MinValue;
+                    for (int c = 0; c < numClasses; c++)
+                    {
+                        float v = Deger(t, c);
+                        if (v > maxLogit) maxLogit = v;
+                    }
+                    float sumExp = 0f, bestExp = 0f;
+                    for (int c = 0; c < numClasses; c++)
+                    {
+                        float e = MathF.Exp(Deger(t, c) - maxLogit);
+                        sumExp += e;
+                        if (e > bestExp) { bestExp = e; bestIdx = c; }
+                    }
+                    prob = sumExp > 0 ? bestExp / sumExp : 0f;
+                }
 
                 if (bestIdx >= 0 && bestIdx < Alphabet.Length)
                 {
@@ -224,6 +317,7 @@ namespace Otopark.Client.Helpers
                     {
                         sb.Append(ch);
                         scoreSum += prob;
+                        if (prob < minProb) minProb = prob;
                         scoreCount++;
                     }
                 }
@@ -231,7 +325,7 @@ namespace Otopark.Client.Helpers
 
             string plate = sb.ToString();
             double avgScore = scoreCount > 0 ? scoreSum / scoreCount : 0;
-            return (plate, avgScore);
+            return (plate, avgScore, scoreCount > 0 ? minProb : 0);
         }
 
         private static void AppLog(string msg)
