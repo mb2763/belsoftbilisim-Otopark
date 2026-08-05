@@ -70,7 +70,27 @@ namespace Otopark.Client.Helpers
             _haarDetector = new HaarPlateDetector();
             InitTesseract();
 
-            AppLog($"Lokal motor: ONNX-detector={_onnxDetector.IsAvailable} ONNX-OCR={_onnxOcr.IsAvailable} Haar={_haarDetector.IsAvailable} Tesseract={(_engine != null && !_initError)}");
+            // _initError = "hicbir motor yok, tanima imkansiz" demektir.
+            // ONEMLI: Tesseract'in EKSIK OLMASI bu duruma sokMAZ. Tesseract yalnizca
+            // ONNX OCR gecerli bir sonuc uretemediginde devreye giren YEDEKTIR
+            // (bkz. satir ~200: "if (_engine != null && !GecerliTrVar())").
+            // Eskiden InitTesseract eksik eng.traineddata icin _initError=true yapiyordu;
+            // RecognizeInternal da ilk satirda _initError'a bakip cikiyordu. Sonuc:
+            // tessdata yoksa ONNX dedektor + ONNX OCR calisir durumdayken bile plaka
+            // tanima TAMAMEN ve SESSIZCE oluyordu. tessdata yayin paketinde GELMEDIGI
+            // (C:\Otopark\tessdata'da durur) icin temiz bir kurulumda sistem hic calismazdi.
+            bool bolgeBulucuVar = _onnxDetector.IsAvailable || _haarDetector.IsAvailable;
+            bool okuyucuVar = _onnxOcr.IsAvailable || _engine != null;
+            if (!bolgeBulucuVar || !okuyucuVar)
+            {
+                _initError = true;
+                AppLog($"Lokal motor DEVRE DISI: bolge bulucu={bolgeBulucuVar} okuyucu={okuyucuVar}. " +
+                       $"C:\\Otopark\\models icindeki plate_detector.onnx / plate_ocr.onnx dosyalarini kontrol edin.");
+            }
+
+            AppLog($"Lokal motor: ONNX-detector={_onnxDetector.IsAvailable} ONNX-OCR={_onnxOcr.IsAvailable} " +
+                   $"Haar={_haarDetector.IsAvailable} Tesseract={_engine != null} (Tesseract opsiyoneldir) " +
+                   $"KULLANILABILIR={!_initError}");
         }
 
         private static bool IsOpenCvAvailable()
@@ -86,8 +106,9 @@ namespace Otopark.Client.Helpers
                 var trainedFile = Path.Combine(TessDataPath, "eng.traineddata");
                 if (!File.Exists(trainedFile))
                 {
-                    AppLog($"Tesseract veri dosyasi yok: {trainedFile}");
-                    _initError = true;
+                    // OPSIYONEL: Tesseract sadece yedek okuyucudur. Yoksa ONNX OCR ile devam edilir.
+                    // Burada _initError SET EDILMEZ (bkz. yapicidaki aciklama).
+                    AppLog($"Tesseract veri dosyasi yok: {trainedFile} - yedek OCR devre disi, ONNX ile devam ediliyor.");
                     return;
                 }
 
@@ -99,8 +120,9 @@ namespace Otopark.Client.Helpers
             }
             catch (Exception ex)
             {
-                AppLog($"Tesseract baslatilamadi: {ex.Message}");
-                _initError = true;
+                // Tesseract opsiyonel - basarisiz olsa da ONNX ile devam.
+                AppLog($"Tesseract baslatilamadi: {ex.Message} - yedek OCR devre disi, ONNX ile devam ediliyor.");
+                _engine = null;
             }
         }
 

@@ -260,11 +260,35 @@ namespace Otopark.Client.Views
                 // web'deki kamera tanimi HIC BULUNAMIYORDU ve goruntu gelmiyordu.
                 long zoneId = 0;
                 if (DataContext is PersonnelDashboardViewModel vmZone && vmZone.BolgeId > 0)
+                {
                     zoneId = vmZone.BolgeId;
+                }
                 else
-                    try { zoneId = Services.AppConfigHelper.BolgeId; } catch { }
+                {
+                    // Bolge SECILMEDI (yonetici "Tum Bolgeler" modu). Tek bir bolge olmadigi
+                    // icin kamera tanimi belirsizdir; appsettings'teki yedek deger denenir.
+                    // ESKIDEN: bu dusus SESSIZ yapiliyordu. Yedek deger (342) gercek bolgeyle
+                    // (orn. 1350) uyusmadigi icin kamera bulunamiyor, log'da sadece anlamsiz
+                    // bir "zoneId=342" kaliyor ve arizanin sebebi anlasilamiyordu.
+                    zoneId = Services.AppConfigHelper.BolgeId;
+                    if (zoneId > 0)
+                    {
+                        Log($"Bolge secilmedi (yonetici modu). Kamera icin appsettings.json > " +
+                            $"Parking:BolgeId yedek degeri kullaniliyor: {zoneId}. " +
+                            $"Bu numara bu otoparkin gercek bolgesi degilse kamera GELMEZ; " +
+                            $"giris ekranindan bolge secin veya bu degeri duzeltin.");
+                    }
+                    else
+                    {
+                        Log("Bolge secilmedi ve appsettings.json > Parking:BolgeId de okunamadi. " +
+                            "Kamera baslatilamiyor. Giris ekranindan bolge secin.");
+                    }
+                }
 
-                await Services.CameraConfigService.LoadAsync(Otopark.Core.Session.UserSession.CompanyId, zoneId);
+                // Gecersiz bolge ile sunucuya sormanin anlami yok; bos sonuc doner ve
+                // hata mesaji yaniltici olur.
+                if (zoneId > 0)
+                    await Services.CameraConfigService.LoadAsync(Otopark.Core.Session.UserSession.CompanyId, zoneId);
             }
             catch { }
             Services.CameraSnapshotService.Start(EntryCaptureFolder, ExitCaptureFolder, _cameraCts.Token);
