@@ -12,21 +12,51 @@ namespace Otopark.Client.Helpers
     /// </summary>
     public static class PlateModelDownloader
     {
-        // Apache 2.0 lisans - HuggingFace public model:
-        // https://huggingface.co/keremberke/yolov8n-license-plate-detection (MIT)
+        // ---------------------------------------------------------------------------
+        // PLAKA DEDEKTORU (YOLO11, tek sinif: License_Plate)
+        //
+        // ONCEKI adreslerin DORDU DE OLU (2026-08 itibariyle olculdu):
+        //   keremberke/awesome-yolov8-models .../yolov8n-license-plate.onnx   -> HTTP 404
+        //   huggingface keremberke/yolov8n-license-plate ...                  -> HTTP 401
+        //   ankandrew/fast-plate-ocr .../european-plates-mobile-vit-v2 ...    -> HTTP 404
+        //   ankandrew/fast-plate-ocr .../global-plates-mobile-vit-v2 ...      -> HTTP 404
+        // Bu yuzden modeli olmayan bir makinede otomatik indirme hic calismiyordu.
+        //
+        // YENI KAYNAK: morsetechlab/yolov11-license-plate-detection (HuggingFace).
+        // Mevcut diskteki 96.7 MB'lik model bu ailenin "l" (large) varyantidir.
+        //
+        // NEDEN "n" (nano) VARSAYILAN:
+        //   Gercek kareler uzerinde olculdu (CPU):
+        //     YOLO11l  -> 580 ms/kare, esik ustu 9 tespit
+        //     YOLO11n  ->  77 ms/kare, esik ustu 10 tespit   (7.5 KAT HIZLI, dogruluk ayni)
+        //   Kamera 500 ms'de bir kare uretiyor; agir model yuzunden 10 karenin 9'u
+        //   atlaniyordu ve gecen aracin yalnizca 1 karesi islenebiliyordu.
+        //   Cikti bicimi ayni (YOLO11 ham cikti [batch,5,N]) -> kod degisikligi GEREKMEZ.
+        //
+        // Daha yuksek dogruluk gerekirse "s" varyantina gecilebilir (36 MB, ~200 ms).
+        // NOT: Ultralytics YOLO turevleri AGPL-3.0'dir; ticari kullanimda lisans kontrolu gerekir.
+        // ---------------------------------------------------------------------------
         private static readonly string[] DetectorUrls =
         {
-            // GitHub releases'tan birden fazla kaynak (biri patlarsa digerine gec)
-            "https://github.com/keremberke/awesome-yolov8-models/releases/download/v8.2.0/yolov8n-license-plate.onnx",
-            "https://huggingface.co/keremberke/yolov8n-license-plate/resolve/main/license_plate_detector.onnx"
+            // n = nano (10 MB) — kiosk PC'de CPU icin en uygun
+            "https://huggingface.co/morsetechlab/yolov11-license-plate-detection/resolve/main/license-plate-finetune-v1n.onnx",
+            // s = small (36 MB) — n yetersiz kalirsa
+            "https://huggingface.co/morsetechlab/yolov11-license-plate-detection/resolve/main/license-plate-finetune-v1s.onnx",
+            // ayna depo (ayni dosyalar)
+            "https://huggingface.co/DavidDrill69/yolov11-license-plate-detection/resolve/main/license-plate-finetune-v1n.onnx",
         };
 
-        // FastPlateOCR Apache 2.0 lisans:
-        // https://github.com/ankandrew/fast-plate-ocr/releases
+        // ---------------------------------------------------------------------------
+        // PLAKA OCR
+        // fast-plate-ocr release varliklari kaldirilmis; HuggingFace deposu da artik
+        // herkese acik degil (HTTP 401). Calisan bir HERKESE ACIK kaynak bulunamadi.
+        // Diskteki mevcut model (C:\Otopark\models\plate_ocr.onnx, 5 MB, NHWC [N,64,128,3])
+        // CALISIYOR; bu yuzden OCR icin otomatik indirme YEDEGI YOK.
+        // Yeni bir makineye kurulumda plate_ocr.onnx ELLE kopyalanmalidir.
+        // ---------------------------------------------------------------------------
         private static readonly string[] OcrUrls =
         {
-            "https://github.com/ankandrew/fast-plate-ocr/releases/download/arg-plates/european-plates-mobile-vit-v2-model.onnx",
-            "https://github.com/ankandrew/fast-plate-ocr/releases/download/arg-plates/global-plates-mobile-vit-v2-model.onnx"
+            // Calisan herkese acik adres bulunursa buraya eklenecek.
         };
 
         private static readonly SemaphoreSlim _gate = new(1, 1);
