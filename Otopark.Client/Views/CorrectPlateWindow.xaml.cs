@@ -136,9 +136,11 @@ public partial class CorrectPlateWindow : Window
     private void BtnSave_Click(object sender, RoutedEventArgs e)
     {
         var plate = new string((TxtNewPlate.Text ?? "").Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
-        if (!PlateRules.IsLikelyPlate(plate))
+        // Personel gozuyle gordugu plakayi yaziyor -> gevsek dogrulama.
+        // IsLikelyPlate kullanilirsa yabanci plakalar (AKKUS-H gibi) reddedilir.
+        if (!PlateRules.IsAcceptableManualPlate(plate))
         {
-            MessageBox.Show("Gecerli bir plaka giriniz (5-10 karakter, harf+rakam).",
+            MessageBox.Show("Gecerli bir plaka giriniz (4-12 karakter, harf ve rakam).",
                 "Uyari", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }

@@ -251,9 +251,16 @@ namespace Otopark.Client.Helpers
             // TR plaka formati eslesirse direk kabul (yedek).
             if (TrPlate.IsMatch(plate)) return true;
 
+            // YABANCI PLAKA TOLERANSI:
+            // Eskiden "en az 2 harf VE en az 2 rakam" sarti vardi. Bu sart Belcika/Hollanda
+            // kisisellestirilmis plakalarini (orn. "AKKUS-H" -> AKKUSH, 0 rakam) reddediyordu.
+            // 1388 gercek kare uzerinde olculdu: ONNX dedektoru SADECE gercek plakalarda kutu
+            // uretiyor (bos koridorda 0 kutu). Yani asil kapi dedektor, metin kurali degil.
+            // Bu yuzden sart gevsetildi: en az 1 harf yeterli.
+            // "En az 1 harf" saf-rakam cop okumalarini (orn. "208188") hala eliyor.
+            // Tabela kelimeleri asagidaki blacklist + Levenshtein kontrolleriyle korunuyor.
             int letterCount = plate.Count(char.IsLetter);
-            int digitCount = plate.Count(char.IsDigit);
-            if (letterCount < 2 || digitCount < 2) return false;
+            if (letterCount < 1) return false;
 
             // Tabela/yazi kelimesi kontrolu - plakadaki rakamlari cikarip sadece harfleri kontrol et
             var lettersOnly = new string(plate.Where(char.IsLetter).ToArray());
@@ -290,6 +297,25 @@ namespace Otopark.Client.Helpers
             // Tek karakterin tekrari (AAAAAA, 11111A gibi) - geçersiz
             if (plate.Distinct().Count() < 3) return false;
 
+            return true;
+        }
+
+        /// <summary>
+        /// PERSONELIN ELLE YAZDIGI plaka icin gevsek dogrulama.
+        /// Otomatik okuma kurallari (IsLikelyPlate) burada UYGULANMAZ: personel plakayi
+        /// gozuyle gormustur, bizim format kutuphanemizden daha guvenilirdir.
+        /// Ozellikle yabanci/kisisellestirilmis plakalar (AKKUS-H, NO-MF-38) elle
+        /// yazilabilsin diye harf/rakam sayisi sarti yoktur.
+        /// Sadece bariz sacmaliklari eler.
+        /// </summary>
+        public static bool IsAcceptableManualPlate(string plate)
+        {
+            if (string.IsNullOrWhiteSpace(plate)) return false;
+            if (plate.Length < 4 || plate.Length > 12) return false;
+            if (!plate.All(char.IsLetterOrDigit)) return false;
+            if (plate.Distinct().Count() < 2) return false;
+            // Personel yanlislikla tabela kelimesi yazarsa yine de engelle
+            if (BlacklistWords.Contains(plate)) return false;
             return true;
         }
 
@@ -492,8 +518,10 @@ namespace Otopark.Client.Helpers
                     {
                         if (string.IsNullOrWhiteSpace(c.plate)) continue;
                         var normalized = PlateRules.Normalize(c.plate);
-                        // 70 ulke format kutuphanesinden eslesme zorunlu.
-                        if (!Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(normalized)) continue;
+                        // Format kutuphanesi eslesmesi ARTIK ZORUNLU DEGIL: kutuphanede
+                        // olmayan yabanci/kisisellestirilmis plakalar da kabul edilmeli.
+                        // Tabela/cop okumalari IsLikelyPlate ile eleniyor.
+                        if (!PlateRules.IsLikelyPlate(normalized)) continue;
                         if (best == null || c.score > best.Value.score)
                             best = (normalized, c.score);
                     }

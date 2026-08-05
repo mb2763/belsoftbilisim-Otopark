@@ -496,11 +496,26 @@ namespace Otopark.Client.Views
                 string plate = best.Value.Plate;
                 double score = best.Value.Score;
 
-                // 70 ulke plaka format kutuphanesi (PDF'ten cikarilmis) - bilinen format zorunlu.
-                // Bu rastgele OCR ciktilarini ve tabela yazilarini engeller.
-                if (!Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(plate))
+                // FORMAT KONTROLU ARTIK RED SEBEBI DEGIL — YALNIZCA BILGI.
+                //
+                // Onceden bilinen formata uymayan her okuma ATILIYORDU. Bu, YABANCI PLAKALI
+                // araclarin girisinin TAMAMEN KACMASINA yol aciyordu (DA587AP, H776XL,
+                // W73706E gibi okumalar cope gidiyordu).
+                //
+                // Sahte okuma riski KAYNAKTA kesildi: bolgeler yalnizca gercek dedektorden
+                // (ONNX/Haar) geliyor; kenar/renk sezgiseli devre disi. 250 gercek kare
+                // uzerinde olculdu -> bos koridor karelerinde SIFIR kutu uretildi.
+                //
+                // Ilke: yanlis bir harf, aracin tamamen kacmasindan iyidir. Personel plakayi
+                // Plaka Revizyon ekranindan duzeltebilir; kacan arac ise geri gelmez.
+                bool bilinenFormat = Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(plate);
+                if (!bilinenFormat)
+                    Log($"[{side}] Bilinmeyen format (KABUL EDILDI - yabanci plaka olabilir): '{plate}' skor={score:F2}");
+
+                // Cok kisa okumalar hala reddedilir (tek/iki karakter plaka olamaz)
+                if (plate.Length < 5)
                 {
-                    Log($"[{side}] Red (bilinmeyen format): '{plate}' skor={score:F2}");
+                    Log($"[{side}] Red (cok kisa): '{plate}' skor={score:F2}");
                     return;
                 }
 
@@ -640,7 +655,9 @@ namespace Otopark.Client.Views
                 if (localResult != null && !string.IsNullOrWhiteSpace(localResult.Plate))
                 {
                     var normalized = PlateRules.Normalize(localResult.Plate);
-                    if (Otopark.Client.Helpers.Plate.PlateFormatLibrary.IsKnownFormat(normalized))
+                    // Bilinen formata uymasa da KABUL (yabanci plaka). Onceden burada
+                    // eleniyor ve bulut API'ye dusuluyordu; bulut da kapaliysa arac kaciyordu.
+                    if (normalized.Length >= 5)
                         return (normalized, localResult.Score);
                 }
             }

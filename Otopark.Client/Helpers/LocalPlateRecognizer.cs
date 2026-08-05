@@ -201,27 +201,37 @@ namespace Otopark.Client.Helpers
 
                 if (allCandidates.Count == 0) return null;
 
-                // 3) SADECE gecerli TR plakalari kabul et + CONSENSUS:
-                //    Birden fazla aday TR formati eslestirirse, EN SIK gorulen plakayi sec.
-                //    Bu, ONNX OCR'in farkli varyantlarda farkli okuma yapmasi durumunda
-                //    en cok desteklenen yazimi tercih eder (yanlis pozitif azaltir).
-                var trCandidates = allCandidates
-                    .Where(c =>
-                    {
-                        var m = PlateFormatLibrary.Match(c.Plate);
-                        return m != null && m.CountryCode == "TR";
-                    })
-                    .ToList();
+                // 3) ADAY SECIMI — TR TERCIH EDILIR AMA SART DEGIL.
+                //
+                // ONCEDEN yalnizca TR formatina uyan okumalar kabul ediliyor, digerleri
+                // ATILIYORDU. Bu, YABANCI PLAKALI ve formati tam tutmayan araclarin
+                // girisinin TAMAMEN KACMASINA yol aciyordu.
+                //
+                // OLCUM (250 gercek kare): dedektor bos koridor karelerinde SIFIR kutu
+                // uretti; kutu buldugu 6 karenin 6'sinda da plaka okundu — ama 6'si da
+                // TR formatinda olmadigi icin (DA587AP, H776XL, W73706E gibi yabanci
+                // plakalar) mevcut kod hepsini atiyordu.
+                //
+                // Kural artik: "kutu varsa gercek plaka vardir" -> okumayi KABUL ET.
+                // Yanlis bir harf olmasi, aracin tamamen kacmasindan iyidir; personel
+                // web/masaustu Plaka Revizyon ekranindan duzeltebilir.
+                bool TrMi(string plaka)
+                {
+                    var m = PlateFormatLibrary.Match(plaka);
+                    return m != null && m.CountryCode == "TR";
+                }
 
-                if (trCandidates.Count == 0) return null;
+                if (allCandidates.Count == 0) return null;
 
                 // En iyi plaka secimi:
-                // 1) En uzun plaka (eksik karakter atlamadan tam okuma) - 38AIH552 > 38AH552
-                // 2) En sik tekrar eden (consensus)
-                // 3) En yuksek skorlu
-                var topGroup = trCandidates
+                // 1) TR formatina uyanlar ONCE (yerel trafik cogunlukta, dogruluk yuksek)
+                // 2) En uzun plaka (eksik karakter atlamadan tam okuma) - 38AIH552 > 38AH552
+                // 3) En sik tekrar eden (consensus)
+                // 4) En yuksek skorlu
+                var topGroup = allCandidates
                     .GroupBy(c => c.Plate)
-                    .OrderByDescending(g => g.Key.Length)
+                    .OrderByDescending(g => TrMi(g.Key))
+                    .ThenByDescending(g => g.Key.Length)
                     .ThenByDescending(g => g.Count())
                     .ThenByDescending(g => g.Max(c => c.Score))
                     .First();
