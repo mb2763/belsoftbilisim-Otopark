@@ -350,6 +350,22 @@ namespace Otopark.Client.Helpers
 
         public int TokenCount => _tokens.Count;
 
+        /// <summary>
+        /// Kullanilabilir (tukenmemis / gecersiz isaretlenmemis) token var mi?
+        /// Yoksa buluta hic gidilmez — bkz. RecognizeAsync basindaki erken cikis.
+        /// </summary>
+        public bool KullanilabilirTokenVar
+        {
+            get
+            {
+                var cutoff = DateTime.UtcNow.AddHours(-1);
+                foreach (var t in _tokens)
+                    if (!_tokenExhaustedAt.TryGetValue(t, out var e) || e <= cutoff)
+                        return true;
+                return false;
+            }
+        }
+
         private string? PickActiveToken()
         {
             // Tukenmis tokenler 1 saat sonra tekrar denenir
@@ -376,6 +392,13 @@ namespace Otopark.Client.Helpers
         public async Task<PlateRecognitionResult?> RecognizeAsync(string imagePath, string? regions, CancellationToken ct)
         {
             if (!File.Exists(imagePath)) return null;
+
+            // ERKEN CIKIS: hicbir token kullanilabilir degilse buluta HIC gitme.
+            // Onceden once asagidaki hiz sinirlayicida ~1.1 sn BEKLENIYOR, sonra
+            // "token yok" deyip cikiliyordu. Token gecersiz oldugunda bu, HER KARE icin
+            // bosa 1 saniye demekti; islenebilen kare sayisi dusuyor ve yerel motorun
+            // plakayi yakalama sansi azaliyordu.
+            if (!KullanilabilirTokenVar) return null;
 
             // Rate limit: max ~1 cagri / 0.8sn (tum tokenler arasinda paylasimli)
             await _rateLimiter.WaitAsync(ct);
