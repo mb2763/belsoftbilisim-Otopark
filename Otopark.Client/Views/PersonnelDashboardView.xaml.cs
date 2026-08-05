@@ -452,12 +452,19 @@ namespace Otopark.Client.Views
             string side = isEntry ? "giris" : "cikis";
             try
             {
+                // OLCUM: hangi asamanin ne kadar surdugu log'a yazilir. Kare basi sure
+                // 4 sn'ye ciktiginda darbogazi tahminle degil OLCUMLE bulmak icin.
+                var _swTam = System.Diagnostics.Stopwatch.StartNew();
+
                 // 1) Tam goruntu - TR bolge ipucu ile (Turk plakalarinda %90+ dogruluk)
                 var best = await RecognizeWithScoreAsync(imagePath, ct);
+                long msTam = _swTam.ElapsedMilliseconds;
+                long msRoi = 0;
 
                 // 2) ROI kirpma: skor < 0.80 veya sonuc yoksa her zaman dene
                 if (best == null || best.Value.Score < 0.80)
                 {
+                    var _swRoi = System.Diagnostics.Stopwatch.StartNew();
                     double xp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:XPercent"],
                         System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) ? x : 0.10;
                     double yp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:YPercent"],
@@ -477,11 +484,12 @@ namespace Otopark.Client.Views
                             best = roiBest;
                         }
                     }
+                    msRoi = _swRoi.ElapsedMilliseconds;
                 }
 
                 if (best == null)
                 {
-                    Log($"[{side}] Plaka yok: {Path.GetFileName(imagePath)}");
+                    Log($"[{side}] Plaka yok: {Path.GetFileName(imagePath)} (tam={msTam}ms roi={msRoi}ms)");
                     return;
                 }
 

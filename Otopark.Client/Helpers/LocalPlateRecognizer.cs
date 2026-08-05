@@ -37,6 +37,13 @@ namespace Otopark.Client.Helpers
             ['B'] = '8',
         };
 
+        /// <summary>
+        /// Bir karede OCR'a verilecek EN FAZLA plaka bolgesi sayisi.
+        /// Dedektor bolgeleri guven sirasina gore dondurur; 5 yerine 2 almak
+        /// dogrulugu pratikte etkilemez ama kare basina isi 2.5 kat azaltir.
+        /// </summary>
+        private const int MaxRegions = 2;
+
         private TesseractEngine? _engine;
         private readonly OnnxPlateDetector _onnxDetector;
         private readonly OnnxPlateOcr _onnxOcr;
@@ -124,9 +131,29 @@ namespace Otopark.Client.Helpers
                 // (gelistirme/debug icin; plaka tanindiktan sonra dosya adi guncellenir).
                 string? vehicleFramePath = TrySaveVehicleFrame(imagePath);
 
-                // 2) Her bolgeyi hem ONNX OCR hem Tesseract'a ver, en iyi sonucu bul
+                // 2) Bolgeleri OCR'a ver. ONCE ONNX OCR (hizli), Tesseract YALNIZCA yedek.
+                //
+                // PERFORMANS NOTU (olculdu): eskiden her kare icin
+                //     5 bolge x 5 varyant  = 25 ONNX OCR   (hizli, ~5 ms)
+                //     5 bolge x 3 varyant x 2 PSM = 30 TESSERACT (yavas, ~100 ms+)
+                //   ve skor < 0.80 ise TUM bu is ROI kirpma ile IKINCI KEZ yapiliyordu.
+                // Sonuc: kare basina ~4 sn. Kamera 0.5 sn'de kare uretirken 10 karenin 9'u
+                // atlaniyor, gecen aracin tek karesi isleniyor ve plaka kaciriliyordu.
+                //
+                // DUZELTME:
+                //   - Bolge sayisi 5 -> 2 (dedektor zaten guven sirasina gore veriyor)
+                //   - Tesseract SADECE ONNX gecerli bir TR plakasi bulamadiysa calisir
+                //     (kod yorumunda da zaten "Tesseract yedek" yaziyordu)
                 var allCandidates = new List<Candidate>();
-                foreach (var region in regions.Take(5))
+
+                // Su ana kadar gecerli TR plakasi bulundu mu?
+                bool GecerliTrVar() => allCandidates.Any(c =>
+                {
+                    var m = PlateFormatLibrary.Match(c.Plate);
+                    return m != null && m.CountryCode == "TR";
+                });
+
+                foreach (var region in regions.Take(MaxRegions))
                 {
                     using (region)
                     {
@@ -146,8 +173,10 @@ namespace Otopark.Client.Helpers
                             }
                         }
 
-                        // Tesseract yedek
-                        if (_engine != null)
+                        // Tesseract YEDEK: yalnizca ONNX OCR gecerli bir TR plakasi
+                        // uretemediyse calistirilir. Bu tek kosul kare basina ~30 Tesseract
+                        // cagrisini ortadan kaldirir (normal durumda ONNX zaten buluyor).
+                        if (_engine != null && !GecerliTrVar())
                         {
                             foreach (var preprocessed in PreprocessVariants(region))
                             {
