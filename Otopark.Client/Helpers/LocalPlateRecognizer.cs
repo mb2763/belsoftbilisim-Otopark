@@ -233,7 +233,15 @@ namespace Otopark.Client.Helpers
                         }
 
                         // Tesseract YEDEK: yalnizca ONNX OCR EMIN bir okuma uretemediyse.
-                        if (_engine != null && !EminOkumaVar())
+                        //
+                        // EK KOSUL (06.08.2026): bolge GUVENILIR bir dedektorden gelmis olmali.
+                        // Tesseract cagrisi pahalidir (2 varyant x 2 PSM x bolge = ~30 cagri,
+                        // ~700 ms). Haar/sezgisel bir bolge zaten supheli oldugundan oraya bu
+                        // maliyeti harcamak kare suresini 3-5 saniyeye cikariyor ve kamera
+                        // 500 ms'de kare urettigi icin GERCEK ARACLAR KACIYOR.
+                        // ONNX yoksa (model dosyasi eksik) Tesseract tek okuyucudur - o zaman calisir.
+                        bool tesseractUygun = bolgeKaynagi == "onnx" || !_onnxDetector.IsAvailable;
+                        if (_engine != null && tesseractUygun && !EminOkumaVar())
                         {
                             foreach (var preprocessed in PreprocessVariants(region))
                             {
@@ -412,8 +420,31 @@ namespace Otopark.Client.Helpers
                 if (regions.Count > 0) { kaynak = "onnx"; return regions; }
             }
 
-            // 2) Haar cascade — ONNX bulamazsa GERCEK bir dedektor daha denenir.
-            //    (Haar da bir dedektordur; kenar/renk sezgiseli gibi gurultu uretmez.)
+            // 2) HAYALET OKUMA KAPISI  *** KONUMU KRITIK ***
+            //    Guvenilir dedektor (ONNX) CALISIYOR ve "bu karede plaka YOK" diyorsa,
+            //    BASKA HICBIR dedektore dusulmez. Kare bostur, nokta.
+            //
+            //    06.08.2026 SAHA HATASI: bu kapi ESKIDEN Haar blogundan SONRA duruyordu.
+            //    Sonuc: ONNX dogru sekilde "plaka yok" dedigi her bos karede Haar devreye
+            //    giriyor ve GORUNTUDEKI TARIH DAMGASINI plaka saniyordu. Log'dan gercek
+            //    ornekler (hepsi kaynak=haar):
+            //        '08Q62026'  <- "08-06-2026"
+            //        '2926TH11'  <- "2026 Thu 11"
+            //        'D62026', '0G2026', 'QG2026I', '962026' ...
+            //    Personele saniyede bir "PLAKAYI DOGRULAYIN" uyarisi cikiyordu.
+            //
+            //    Ikinci ve daha agir sonucu: her hayalet okuma "supheli" sayildigi icin
+            //    Tesseract (30 cagri) + ROI ile TUM HATTIN IKINCI KEZ calismasi tetikleniyor,
+            //    kare suresi 121 ms'den 3-5 SANIYEYE cikiyordu. Kamera 500 ms'de kare
+            //    urettigi icin 10 karenin 9'u atlaniyor ve GERCEK ARACLAR KACIYORDU.
+            //
+            //    05.08 olcumunde bu gorulmedi cunku olcum betigi yalnizca ONNX yolunu
+            //    taklit ediyordu; Haar yedegi hic calistirilmamisti.
+            if (onnxVar) return regions;   // bos liste
+
+            // ---- Buradan sonrasi YALNIZCA ONNX modeli HIC YOKKEN calisir ----
+
+            // 3) Haar cascade — ONNX yoksa gercek bir dedektor daha denenir.
             if (_haarDetector != null && _haarDetector.IsAvailable)
             {
                 var boxes = _haarDetector.Detect(src);
@@ -422,14 +453,7 @@ namespace Otopark.Client.Helpers
                 if (regions.Count > 0) { kaynak = "haar"; return regions; }
             }
 
-            // 3) HAYALET OKUMA KAPISI:
-            //    Guvenilir dedektor (ONNX) CALISIYOR ve "bu karede plaka YOK" diyorsa,
-            //    kenar/renk sezgisellerine DUSULMEZ. Bos koridor karesinde tabela, duvar
-            //    paneli, zemin cizgisi "plaka bolgesi" olarak donuyor, OCR bir metin uyduruyor
-            //    ve otomatik giris aciliyordu (kayit var ama fotografta arac yok).
-            if (onnxVar) return regions;   // bos liste
-
-            // ONNX HIC YOKSA son care: kenar + renk sezgiseli (gurultulu, tek kare kabul edilmez)
+            // 4) Son care: kenar + renk sezgiseli (gurultulu, tek kare kabul edilmez)
             foreach (var r in DetectByEdges(src).Take(5))
                 regions.Add(new PlateRegion(r, false));
             foreach (var r in DetectByColor(src).Take(3))

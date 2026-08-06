@@ -514,11 +514,22 @@ namespace Otopark.Client.Views
                 long msTam = _swTam.ElapsedMilliseconds;
                 long msRoi = 0;
 
-                // 2) ROI kirpma: sonuc yoksa VEYA okuma SUPHELI ise dene.
-                //    (Eskiden olcut "skor < 0.80" idi; skor artik tek-kare kabul icin
-                //     0.90'a sabitlendiginden o kosul hicbir zaman saglanmiyordu.
-                //     Dogru olcut guven: model emin degilse kirpilmis goruntuyu de dene.)
-                if (best == null || best.Value.Supheli)
+                // 2) ROI kirpma - IKINCI TAM GECIS. Pahali oldugu icin kosulu dar tutulur.
+                //
+                // ROI'nin ise yaradigi TEK durum: plaka uzak/kucuk oldugu icin tam karede
+                // hic bulunamadi; kirpip buyutunce bulunabilir.
+                //
+                // Ise YARAMADIGI durumlar (06.08.2026 olcumu):
+                //   - Plaka kare KENARINDA kirpik kalmis  -> ROI daha da kirpar, kotulestirir
+                //   - Kutu bulundu ama guven dusuk        -> ayni goruntu, ayni model,
+                //                                            genelde ayni sonuc; sadece 2 kat maliyet
+                //
+                // Kosul genis birakildiginda (her supheli okumada ROI) kare suresi
+                // 121 ms -> 3-5 SANIYE'ye cikti; kamera 500 ms'de kare urettigi icin
+                // 10 karenin 9'u atlandi ve gercek araclar kacti (log: roi=4199ms).
+                bool roiDene = best == null
+                    || (best.Value.Supheli && !best.Value.Kenarda && best.Value.MinChar < 0.60);
+                if (roiDene)
                 {
                     var _swRoi = System.Diagnostics.Stopwatch.StartNew();
                     double xp = double.TryParse(Otopark.Core.Services.AppConfig.Configuration["DetectionRoi:XPercent"],
