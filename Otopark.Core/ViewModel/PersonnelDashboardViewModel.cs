@@ -210,6 +210,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             {
                 TotalCapacity = zone.Capacity;
                 UpdateParkCounts();
+                // UpdateParkCounts sayaci YEREL (bugun-only) listeden yeniden yazar;
+                // sunucudan gelen gercek dolulugu ezmemesi icin hemen tazelenir.
+                await RefreshOccupancyAsync();
             }
         }
         catch { }
@@ -287,7 +290,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 // Lokal cache'te plaka+timestamp ile esles
                 row.EntryPlateImagePath = FindLocalImageForRow(row.Plate, d.EntryTimestamp, isEntry: true);
                 if (d.ExitTimestamp.HasValue)
-                    row.ExitPlateImagePath = FindLocalImageForRow(row.Plate, d.ExitTimestamp.Value, isEntry: false);
+                    row.ExitPlateImagePath = CikisGorseliBul(row.Plate, d.ExitTimestamp.Value);
 
                 _allVehicles.Add(row);
 
@@ -335,6 +338,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             UpdateParkCounts();
             ApplyFiltersInternal();
+
+            // Doluluk sayaci SUNUCUDAN tazelenir: yukaridaki yerel hesap yalnizca bugunun
+            // listesini gordugu icin dun girip hala iceride olan araclari kacirir.
+            await RefreshOccupancyAsync();
         }
         catch (Exception ex)
         {
@@ -392,6 +399,36 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 AllZones.Add(z);
         }
         catch { }
+    }
+
+    /// <summary>
+    /// "Bos/Dolu" sayacini SUNUCUDAN tazeler — tarihten bagimsiz gercek doluluk.
+    ///
+    /// NEDEN GEREKLI: UpdateParkCounts sayimi _allVehicles uzerinden yapar; o liste
+    /// varsayilan olarak yalnizca BUGUNUN kayitlarini icerir (GetByZoneTodayAsync).
+    /// Bu yuzden DUN girip hala iceride olan araclar doluluga yansimiyordu — 100 araclik
+    /// otoparkta gece kalan 5 arac varken sabah "0 dolu / 100 bos" gorunuyordu.
+    ///
+    /// Sorgu basarisiz olursa (-1) yerel hesap OLDUGU GIBI birakilir; sayac sifirlanmaz.
+    /// </summary>
+    public async Task RefreshOccupancyAsync()
+    {
+        if (BolgeId == 0) return;
+
+        // Kara liste / Iptaller sekmelerinde sayac zaten guncellenmiyor (bkz. UpdateParkCounts).
+        if (IsStatusBlacklist || IsStatusCancelled) return;
+
+        try
+        {
+            var count = await _parkQuery.GetCurrentParkedCountByZoneAsync(
+                UserSession.CompanyId, UserSession.UserId, BolgeId);
+
+            if (count < 0) return;   // alinamadi -> yerel hesap korunur
+
+            CurrentVehicleCount = count;
+            EmptyParkCount = Math.Max(0, TotalCapacity - count);
+        }
+        catch { /* sayac yerel degeriyle kalir */ }
     }
 
     private void UpdateParkCounts()
@@ -566,6 +603,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             _allVehicles.Insert(0, row);
             UpdateParkCounts();
             ApplyFiltersInternal();
+            await RefreshOccupancyAsync();   // doluluk sunucudan (dun kalan araclar dahil)
 
             // ===== ARACIN ABONELIK DURUMUNU API'DEN KONTROL ET =====
             // A (abone, yesil) ya da N (normal, sari) badge'i + abonelik turu
@@ -804,6 +842,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             row.ParkType = "Iptal";
             UpdateParkCounts();
             ApplyFiltersInternal();
+            await RefreshOccupancyAsync();   // iptal edilen giris dolulugu degistirir
             ShowToast($"{row.Plate} kaydi iptal edildi" + (cikisVar ? " (giris + cikis + borc)." : "."), true);
 
             // Sunucudan yeniden oku: ekran DB'nin gercek halini gostersin.
@@ -1120,6 +1159,21 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 }
             };
 
+            // CIKIS FOTOGRAFI: plaka okundugunda kaydedilen _X_ snapshot'i sunucuya gonderilir.
+            // Onceden HIC gonderilmiyordu; bu yuzden web "Plaka Revizyon" ekraninda cikis
+            // satirlarinda da GIRIS fotografi gorunuyordu.
+            // Okunamazsa cikis engellenmez, yalnizca foto bos gider.
+            try
+            {
+                var exitFoto = GetFirstSnapshotPath(isEntry: false);
+                if (!string.IsNullOrWhiteSpace(exitFoto) && System.IO.File.Exists(exitFoto))
+                {
+                    var b64 = Convert.ToBase64String(System.IO.File.ReadAllBytes(exitFoto));
+                    exitReq.Photo = $"data:image/jpg;base64,{b64}";
+                }
+            }
+            catch { /* foto okunamadi -> cikis normal devam eder */ }
+
             var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
 
             // KRITIK: exitResponse == null durumu ONCEDEN sessizce BASARI sayiliyordu
@@ -1139,6 +1193,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 ShowToast(string.IsNullOrWhiteSpace(errorMsg) ? "Cikis kaydedilemedi." : errorMsg, false);
                 return;
             }
+
+            // Cikis yapan aracin YEREL satiri isaretlenmezse "Bos/Dolu" sayaci dusmez;
+            // UpdateParkCounts sayimi _allVehicles uzerinden yapar.
+            //
+            // existingRow yalnizca PLAKA ile arandigi icin null kalabiliyordu:
+            //   - plaka metni listedekinden farkli okunmus olabilir (bosluk/format),
+            //   - giris kaydi listede olmayabilir (entryId yukarida API'den tazelendi).
+            // Bu durumda eskiden hicbir satir isaretlenmiyor ve arac SAYILMAYA DEVAM
+            // EDIYORDU. Artik EntryId ile de aranir.
+            if (existingRow == null && entryId > 0)
+                existingRow = _allVehicles.FirstOrDefault(v => v.EntryId == entryId && v.ExitDateTime == null);
 
             if (existingRow != null)
             {
@@ -1160,6 +1225,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             if (totalDebt > 0) toast += $" (Diger bolgelerde toplam borc: {totalDebt:F2} TL)";
             ShowToast(toast, true);
             ExitDetectedPlate = "";
+
+            // Sunucu KAYNAK OTORITEDIR: yerel isaretleme tutmasa bile (satir hic listede
+            // yoksa, plaka eslesmediyse) sayac dogru olsun diye liste tazelenir.
+            // Bariyer ACILDIKTAN sonra yapilir; kapinin acilmasini geciktirmez.
+            await LoadParkDataAsync();
         }
         catch (Exception ex)
         {
@@ -1342,6 +1412,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     row.ParkType = "Cikis";
                     UpdateParkCounts();
                     ApplyFiltersInternal();
+                    await RefreshOccupancyAsync();   // cikan arac doluluktan dusulur
                 }
                 catch (Exception exC)
                 {
@@ -1512,6 +1583,18 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     /// ±10 saniye tolerans icinde en yakin dosyayi dondurur.
     /// </summary>
     public static string FindLocalImageForRow(string plate, DateTime timestamp, bool isEntry)
+        => FindLocalImageForRow(plate, timestamp, isEntry, toleransSaniye: 10);
+
+    /// <summary>
+    /// Plaka + timestamp eslesmesiyle lokal cache'ten resim yolu bulur.
+    /// Format: PLAKA_E_yyyyMMddHHmmss.jpg (giris) / PLAKA_X_yyyyMMddHHmmss.jpg (cikis)
+    ///
+    /// TOLERANS NEDEN PARAMETRE: dosya adindaki saat ISTEMCININ saatidir, aranan
+    /// timestamp ise SUNUCUDAN gelir. Iki saat arasinda birkac dakika fark olmasi
+    /// normaldir; ±10 sn ile arandiginda cikis gorseli BULUNAMIYOR ve ekranda bos
+    /// kaliyordu. Once dar tolerans (en dogru eslesme), tutmazsa genis tolerans denenir.
+    /// </summary>
+    public static string FindLocalImageForRow(string plate, DateTime timestamp, bool isEntry, int toleransSaniye)
     {
         if (string.IsNullOrWhiteSpace(plate)) return "";
 
@@ -1539,7 +1622,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 continue;
 
             var delta = Math.Abs((fileTs - timestamp).TotalSeconds);
-            if (delta <= 10 && delta < bestDelta)
+            if (delta <= toleransSaniye && delta < bestDelta)
             {
                 bestDelta = delta;
                 bestPath = f;
@@ -1547,6 +1630,20 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
 
         return bestPath;
+    }
+
+    /// <summary>
+    /// Cikis gorselini kademeli olarak arar: once tam eslesme (±10 sn), bulunamazsa
+    /// saat farkina karsi genis pencere (±15 dk). Cikis gorseli SUNUCUDA TUTULMADIGI
+    /// icin (API'de cikis fotografi alani yok) tek kaynak bu yerel cache'tir; bu yuzden
+    /// bulunamayinca ekran bos kalir.
+    /// </summary>
+    private static string CikisGorseliBul(string plate, DateTime exitTimestamp)
+    {
+        var yol = FindLocalImageForRow(plate, exitTimestamp, isEntry: false, toleransSaniye: 10);
+        if (!string.IsNullOrEmpty(yol)) return yol;
+
+        return FindLocalImageForRow(plate, exitTimestamp, isEntry: false, toleransSaniye: 15 * 60);
     }
 
     // ===== YARDIMCI =====

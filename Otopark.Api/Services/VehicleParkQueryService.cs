@@ -78,6 +78,44 @@ public sealed class VehicleParkQueryService
     }
 
     /// <summary>
+    /// SU AN ICERIDE olan arac sayisi (bolge bazinda) — TARIHTEN BAGIMSIZ.
+    ///
+    /// NEDEN AYRI: "Bos/Dolu" sayaci onceden GetByZoneTodayAsync listesinden hesaplaniyordu;
+    /// o liste yalnizca BUGUNUN kayitlarini dondurdugu icin DUN girip hala iceride olan
+    /// araclar doluluga YANSIMIYORDU (sabahlari otopark bos gorunuyordu).
+    ///
+    /// GetVehicleCurrentPark firma genelini dondurur (bolge parametresi almaz), bu yuzden
+    /// entryZoneId ile burada suzulur. Cikis yapmis kayitlar (exitTimestamp dolu) haric tutulur.
+    ///
+    /// Donus: arac sayisi; sorgu basarisiz olursa -1 (cagiran taraf yerel hesabi korur).
+    /// </summary>
+    public async Task<int> GetCurrentParkedCountByZoneAsync(long companyId, long currentUserId, long zoneId)
+    {
+        try
+        {
+            var url = "VehiclePark/GetVehicleCurrentPark";
+
+            using var response = await _http.PostAsJsonAsync(url, new
+            {
+                companyId = companyId,
+                currentUserId = currentUserId
+            });
+
+            if (!response.IsSuccessStatusCode) return -1;
+
+            var json = await response.Content.ReadAsStringAsync();
+            var list = JsonSerializer.Deserialize<List<VewVehicleParkCurrentDto>>(json, JsonOpts);
+            if (list == null) return -1;
+
+            return list.Count(x => x.EntryZoneId == zoneId && x.ExitTimestamp == null);
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>
     /// KARA LISTE: bolgede odenmemis (eski) borcu olan TUM araclar. Tarih sinirlamasi yoktur.
     /// </summary>
     public async Task<List<ZoneDebtorDto>> GetZoneDebtorsAsync(long companyId, long zoneId)

@@ -17,6 +17,14 @@ public class VehicleParkExitRequest
     public PaymentModel Payment { get; set; } = new();
 
     /// <summary>
+    /// CIKIS anindaki plaka fotografi — "data:image/jpg;base64,..." bicimi.
+    /// Girisin Photo alaninin karsiligi. Sunucu bunu vehicleExitPhoto klasorune yazip
+    /// yolunu EXIT_PHOTO_PATH'e isler; web "Plaka Revizyon" ekrani bunu gosterir.
+    /// Bos gonderilirse cikis normal kaydedilir, yalnizca fotograf olusmaz.
+    /// </summary>
+    public string? Photo { get; set; }
+
+    /// <summary>
     /// BORC ZATEN VAR — cikista YENI borc yazma, MEVCUT borcu bu cikisa bagla.
     /// Kapali Otopark'ta borc GIRISTE olusturuluyor ("Kapali Otopark Giris - PLAKA").
     /// Bu bayrak olmadan NoPay(3) ile yapilan cikis ikinci bir borc daha yazar ve
