@@ -402,6 +402,31 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Cikis anindaki plaka fotografini base64 olarak dondurur (yoksa null).
+    ///
+    /// TEK YERDE tutulur cunku cikis IKI ayri yoldan yapiliyor:
+    ///   1) DoApproveExitAsync        - normal (odemeli) cikis
+    ///   2) BorcluCikisYapAsync       - "Borclu Cikisi Yap" butonu (kuyruk durumu)
+    /// Eskiden yalnizca 1. yol foto gonderiyordu; borclu cikislarda web "Plaka Revizyon"
+    /// ekraninda hala GIRIS fotografi gorunuyordu.
+    ///
+    /// Okunamazsa null doner ve CIKIS ENGELLENMEZ — bariyer acilmali.
+    /// </summary>
+    private string? CikisFotografiBase64()
+    {
+        try
+        {
+            var yol = GetFirstSnapshotPath(isEntry: false);
+            if (string.IsNullOrWhiteSpace(yol) || !System.IO.File.Exists(yol)) return null;
+            return $"data:image/jpg;base64,{Convert.ToBase64String(System.IO.File.ReadAllBytes(yol))}";
+        }
+        catch
+        {
+            return null;   // foto okunamadi -> cikis normal devam eder
+        }
+    }
+
+    /// <summary>
     /// "Bos/Dolu" sayacini SUNUCUDAN tazeler — tarihten bagimsiz gercek doluluk.
     ///
     /// NEDEN GEREKLI: UpdateParkCounts sayimi _allVehicles uzerinden yapar; o liste
@@ -1162,17 +1187,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // CIKIS FOTOGRAFI: plaka okundugunda kaydedilen _X_ snapshot'i sunucuya gonderilir.
             // Onceden HIC gonderilmiyordu; bu yuzden web "Plaka Revizyon" ekraninda cikis
             // satirlarinda da GIRIS fotografi gorunuyordu.
-            // Okunamazsa cikis engellenmez, yalnizca foto bos gider.
-            try
-            {
-                var exitFoto = GetFirstSnapshotPath(isEntry: false);
-                if (!string.IsNullOrWhiteSpace(exitFoto) && System.IO.File.Exists(exitFoto))
-                {
-                    var b64 = Convert.ToBase64String(System.IO.File.ReadAllBytes(exitFoto));
-                    exitReq.Photo = $"data:image/jpg;base64,{b64}";
-                }
-            }
-            catch { /* foto okunamadi -> cikis normal devam eder */ }
+            exitReq.Photo = CikisFotografiBase64();
 
             var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
 
@@ -1389,6 +1404,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                         // Sunucu ikinci borc YAZMASIN; mevcut borcu bu cikisa BAGLASIN.
                         // Aksi halde CREDIT iki katina cikiyordu (80 -> 160).
                         BorcZatenVar = true,
+                        // Borclu cikista da CIKIS FOTOGRAFI gonderilir; eskiden yalnizca
+                        // normal cikis yolu gonderiyordu ve bu satirlar web'de GIRIS
+                        // fotografiyla gorunuyordu.
+                        Photo = CikisFotografiBase64(),
                         Payment = new PaymentModel
                         {
                             CurrentUserId = UserSession.UserId,
