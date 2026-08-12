@@ -672,7 +672,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                             Description = $"Kapali Otopark Giris - {plate}",
                             CompanyId = UserSession.CompanyId,
                             ZoneId = BolgeId,
-                            VehicleExitId = 0
+                            VehicleExitId = 0,
+                            // GIRIS BAGI: sunucudaki gun basina tahakkuk gorevi bu borcu
+                            // "1. gun" olarak sayabilsin. Gonderilmezse gorev ayni gunu
+                            // IKINCI KEZ yazar (arac hem giriste hem tahakkukta borclanir).
+                            VehicleEntryId = entry.Id
                         };
 
                         await _vehicleApi.AddVehicleCreditAsync(creditReq);

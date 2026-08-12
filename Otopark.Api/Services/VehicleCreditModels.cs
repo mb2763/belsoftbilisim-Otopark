@@ -12,6 +12,14 @@ public class AddVehicleCreditRequest
     public long ZoneId { get; set; }
     public long VehicleExitId { get; set; }
     public long? VehicleSubscriptionId { get; set; }
+
+    /// <summary>
+    /// Borcun ait oldugu GIRIS kaydi (VEHICLE_PARK_ENTRY.ID).
+    /// Sunucudaki gun basina tahakkuk gorevi "bu girise kac gun yazilmis" sorusunu
+    /// bu alanla cevapliyor; gonderilmezse giristeki 1. gun sayilamaz ve gorev
+    /// ayni gunu IKINCI KEZ yazar.
+    /// </summary>
+    public long? VehicleEntryId { get; set; }
 }
 
 public class AddVehicleCreditResponse
