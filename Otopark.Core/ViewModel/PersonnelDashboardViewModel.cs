@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.ObjectModel;
 using System;
@@ -226,6 +226,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         try
         {
+            // Engelli arac tipleri bir kez yuklenir; listede "(E)" isareti icin.
+            await EnsureEngelliTipleriAsync();
+
             // KARA LISTE: tarihten BAGIMSIZ — bolgede odenmemis (eski) borcu olan TUM araclar.
             // Arac o gun otoparka girmemis olsa bile listelenir.
             if (IsStatusBlacklist)
@@ -285,6 +288,8 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     TotalDebt = (decimal)(d.CurrentDebitAmount ?? 0),
                     // Cikis yapilmissa cikis tutari hasilata sayilir; icerideki araclarda 0.
                     ExitFee = d.ExitTimestamp.HasValue ? (decimal)(d.CalculatedFee ?? 0) : 0m,
+                    VehicleTypeId = d.VehicleTypeId,
+                    EngelliMi = _engelliVehicleTypeIds.Contains(d.VehicleTypeId),
                 };
 
                 // Lokal cache'te plaka+timestamp ile esles
@@ -804,6 +809,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     // ===== OTOMATIK KAYIT =====
 
     // Cache'le, her giriste lookup tekrarlanmasin
+    // ENGELLI ARAC TIPLERI (18.08.2026).
+    // Engelli arac tipine ayri tarife tanimlanabiliyor (orn. HUNAT: 0-930 dk = 0 TL,
+    // 930-1440 dk = 80 TL). Personel listede bu araclari ayirt edebilsin diye plaka
+    // yaninda "(E)" gosterilir. Tip kimlikleri sabit degil; ada gore bulunur.
+    private HashSet<long> _engelliVehicleTypeIds = new HashSet<long>();
+    private bool _engelliTipleriYuklendi;
+
     private long _cachedAutoVehicleTypeId;
     private long _cachedAutoTariffId;
     private decimal _cachedDailyFee = -1m;
@@ -840,6 +852,33 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     /// Arac turu (OTOMOBIL) ve "Kapali Otopark" tarifesini lookup'tan bulur, cache'ler.
     /// Gunluk ucret de tarifeden alinir (varsa).
     /// </summary>
+    /// <summary>
+    /// Engelli arac tiplerinin kimliklerini bir kez yukler.
+    ///
+    /// Ad esletmesi "ENGELL" on eki ile yapilir: Turkce buyuk-kucuk donusumunde
+    /// "İ" harfi kulturden kulture farkli davrandigi icin (I / i / İ / ı) o harfe
+    /// hic dokunulmaz. Boylece "ENGELLİ", "Engelli", "ENGELLI" hepsi yakalanir.
+    /// </summary>
+    private async Task EnsureEngelliTipleriAsync()
+    {
+        if (_engelliTipleriYuklendi) return;
+        try
+        {
+            var types = await _lookupApi.GetVehicleTypesAsync(UserSession.CompanyId);
+            _engelliVehicleTypeIds = types
+                .Where(t => t.VehicleTypeName != null &&
+                            t.VehicleTypeName.Contains("ENGELL", StringComparison.OrdinalIgnoreCase))
+                .Select(t => t.Id)
+                .ToHashSet();
+            _engelliTipleriYuklendi = true;
+        }
+        catch
+        {
+            // Alinamazsa isaret gosterilmez; liste normal calisir. Sonraki
+            // tazelemede tekrar denenir.
+        }
+    }
+
     private async Task EnsureAutoDefaultsAsync()
     {
         if (_cachedAutoVehicleTypeId != 0 && _cachedAutoTariffId != 0) return;
@@ -1924,7 +1963,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     public partial class VehicleRow : ObservableObject
     {
         [ObservableProperty] private long entryId;
-        [ObservableProperty] private string plate = "";
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(PlateDisplay))]
+        private string plate = "";
         [ObservableProperty] private string parkingName = "";
         [ObservableProperty] private string durationText = "";
         [ObservableProperty] private string parkType = "";
@@ -1938,6 +1979,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         [ObservableProperty] private decimal exitFee;   // Cikis tutari (hasilat icin) - yalnizca cikis yapan araclarda dolu
         [ObservableProperty] private string entryPlateImagePath = "";
         [ObservableProperty] private string exitPlateImagePath = "";
+
+        // Arac tipi (apiden gelir). Engelli araclarin ayri tarifesi olabildigi icin
+        // personel listede ayirt edebilmeli.
+        [ObservableProperty] private long vehicleTypeId;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(PlateDisplay))]
+        private bool engelliMi;
+
+        /// <summary>Listede gosterilen plaka. Engelli araclarda sonuna "(E)" eklenir.</summary>
+        public string PlateDisplay => EngelliMi ? Plate + " (E)" : Plate;
 
         // Arac Giris Turu (apiden gelir): A = Abone (yesil), N = Normal (sari)
         [ObservableProperty] private string entryType = "N";          // "A" veya "N"
