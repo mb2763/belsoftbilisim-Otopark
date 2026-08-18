@@ -123,10 +123,21 @@ public partial class LoginViewModel : ObservableObject
 
             var isAdmin = string.Equals(result.Result.UserType, "Yönetici", StringComparison.OrdinalIgnoreCase);
 
-            // Yonetici degilse bolge secimi zorunlu
-            if (!isAdmin && SelectedZone == null)
+            // BOLGE SECIMI HERKES ICIN ZORUNLU (18.08.2026).
+            //
+            // Onceden yalnizca operatore zorunluydu; yonetici bolge secmeden
+            // girebiliyor ve dashboard'a BolgeId = 0 ile dusuyordu. Sonuclari:
+            //   - cikistaki borc esitlemesi (c.ZoneId == BolgeId) HICBIR borcu
+            //     tutturamiyor -> borc kontrolu fiilen KAPALI,
+            //   - giriste yazilan borc da ZoneId = 0 ile kaydediliyor; o borc
+            //     kalici olarak hicbir bolgeye eslesmiyor ve arac bir daha hic
+            //     engellenmiyor.
+            //
+            // Yonetici tum bolgeleri gormeye devam eder (LoadAllZonesAsync),
+            // ancak arac giris/cikisi icin calisilan bolgenin belli olmasi sart.
+            if (SelectedZone == null)
             {
-                ErrorMessage = "Lutfen bir bolge seciniz.";
+                ErrorMessage = "Lütfen bir bölge seçiniz. Bölge seçilmeden araç giriş/çıkış işlemi yapılamaz.";
                 return;
             }
 

@@ -114,9 +114,18 @@
                                     <Button Content="G" Width="22" Height="18"
                                             Background="#444" Foreground="White" FontSize="9" Margin="1"
                                             Click="BarrierEntry_Click"/>
+                                    <!-- MANUEL CIKIS BARIYERI DEVRE DISI (18.08.2026):
+                                         sorgusuz aciyor ve CIKIS KAYDI YAZMIYORDU. Arac
+                                         sistemde "iceride" kaldigi icin gunluk tahakkuk
+                                         devam ediyor, borclu arac da izsiz cikabiliyordu.
+                                         Cikis icin: otomatik plaka okuma ya da
+                                         "Borclu Cikisi Yap". Kod tarafindaki koruma
+                                         PersonnelDashboardView.xaml.cs > BarrierExit_Click
+                                         icinde duruyor. -->
                                     <Button Content="C" Width="22" Height="18"
                                             Background="#444" Foreground="White" FontSize="9" Margin="1"
-                                            Click="BarrierExit_Click"/>
+                                            Click="BarrierExit_Click"
+                                            Visibility="Collapsed"/>
                                 </StackPanel>
                             </StackPanel>
                             <!-- BORCLU CIKISI: secili araci borclandirarak cikarir + bariyeri acar.

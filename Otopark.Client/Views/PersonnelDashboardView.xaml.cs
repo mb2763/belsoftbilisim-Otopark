@@ -452,23 +452,25 @@ namespace Otopark.Client.Views
             // Tek tarama, dosya adina gore (stat cagrisi yok) - bkz. SonGorseller.
             var latestPath = GetLatestImagePath(folder);
 
-            // Cikis klasorunde yeni dosya yoksa giris klasorunden dene.
-            // Dosya adi kronolojik oldugundan "daha yeni mi" karsilastirmasi ad uzerinden yapilir.
-            if (!isEntry)
-            {
-                bool bayat = latestPath == null ||
-                             (DateTime.UtcNow - File.GetLastWriteTimeUtc(latestPath)).TotalMinutes > 5;
-                if (bayat)
-                {
-                    var entryLatest = GetLatestImagePath(EntryCaptureFolder);
-                    if (entryLatest != null &&
-                        (latestPath == null ||
-                         string.CompareOrdinal(Path.GetFileName(entryLatest), Path.GetFileName(latestPath)) > 0))
-                    {
-                        latestPath = entryLatest;
-                    }
-                }
-            }
+            // CIKIS TARAFI ARTIK GIRIS KLASORUNE DUSMEZ (18.08.2026).
+            //
+            // Burada su mantik vardi: cikis klasorundeki en yeni kare 5 dakikadan
+            // eskiyse ("bayat"), GIRIS klasorundeki kare alinip isEntry:false ile
+            // CIKIS olarak isleniyordu:
+            //
+            //     bool bayat = latestPath == null ||
+            //                  (DateTime.UtcNow - File.GetLastWriteTimeUtc(latestPath)).TotalMinutes > 5;
+            //     if (bayat) { ... latestPath = entryLatest; }
+            //
+            // Sessiz bir otoparkta cikis kamerasi uzun sure kare uretmez; bu
+            // durumda YENI PARK EDEN bir aracin GIRIS fotografi dogrudan cikis
+            // akisini tetikliyordu. AutoApprove:Exit varsayilan acik oldugu icin
+            // arac icerideyken cikis islemi baslatilabiliyor, hatta "girisi
+            // bulunamadi" dalina dusup geriye donuk giris + borc olusabiliyordu.
+            //
+            // Cikis yalnizca CIKIS kamerasinin karesiyle degerlendirilir. Cikis
+            // kamerasi calismiyorsa dogru cozum kamerayi duzeltmektir; giris
+            // karesini cikis sanmak degil.
 
             if (latestPath == null) return;
 
@@ -1033,16 +1035,31 @@ namespace Otopark.Client.Views
             vm.ShowBarrierToast(res.Success, res.Message);
         }
 
-        private async void BarrierExit_Click(object sender, RoutedEventArgs e)
+        private void BarrierExit_Click(object sender, RoutedEventArgs e)
         {
-            // MANUEL CIKIS BARIYERI: personelin kontrolunde, SORGUSUZ acilir.
-            // Kuyrukta hizli kalmasi icin burada borc kontrolu YAPILMAZ.
-            // Borclu araci kayit altina alarak cikarmak icin ayri "Borclu Cikisi Yap"
-            // butonu vardir (BorcluCikis_Click).
+            // MANUEL CIKIS BARIYERI DEVRE DISI (18.08.2026).
+            //
+            // Eski davranis: bariyer SORGUSUZ aciliyordu ve CIKIS KAYDI DA
+            // YAZILMIYORDU. Sonuclari:
+            //   - borclu arac hicbir iz birakmadan cikabiliyordu,
+            //   - VEHICLE_PARK_EXIT olusmadigi icin arac sistemde "iceride"
+            //     kaliyor, gunluk tahakkuk servisi 24 saatte bir yeni gun borcu
+            //     yazmaya devam ediyordu ("cikmis aracin borcu artiyor").
+            //
+            // Cikis artik yalnizca kayit ureten iki yoldan yapilir:
+            //   1) Otomatik cikis  - plaka okunur, borc/abonelik kontrol edilir,
+            //   2) "Borclu Cikisi Yap" - personel onayiyla, borc kayit altina
+            //      alinarak cikarilir.
+            //
+            // Butonun kendisi XAML'de gizlendi; bu koruma, baska bir yerden
+            // (kisayol, otomasyon) tetiklenirse diye burada da duruyor.
 
-            var result = await Services.BarrierService.OpenExitGateAsync();
             if (DataContext is PersonnelDashboardViewModel vm3)
-                vm3.ShowBarrierToast(result.Success, result.Message);
+            {
+                vm3.ShowBarrierToast(false,
+                    "Manuel çıkış bariyeri devre dışı. Kayıtsız çıkış yapılamaz — " +
+                    "borçlu araç için \"Borçlu Çıkışı Yap\" butonunu kullanın.");
+            }
         }
 
         // ===== MANUEL YAKALAMA =====

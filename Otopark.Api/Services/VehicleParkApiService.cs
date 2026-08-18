@@ -253,15 +253,31 @@ public partial class VehicleParkApiService
 
     /// <summary>
     /// Aracin tum bolgelerdeki kredi kayitlarini doner (borc + odeme detaylari).
+    ///
+    /// HATA DURUMUNDA ISTISNA FIRLATIR — BOS LISTE DONMEZ (18.08.2026).
+    ///
+    /// Onceden burada "if (!response.IsSuccessStatusCode) return new();" vardi.
+    /// Sunucu 500 dondugunde ya da uc erisilemedigi'nde cagiran taraf BOS LISTE
+    /// aliyor, bunu "borcu yok" diye yorumluyor ve BORCLU ARACIN BARIYERINI
+    /// ACIYORDU. Sessiz basarisizlik yerine artik istisna firlatiliyor; cikis
+    /// akisi bunu yakalayip cikisi DURDURUR (bkz. GetVehicleDebtsAsync).
     /// </summary>
     public async Task<List<VehicleCreditDto>> GetVehicleCreditsAsync(long vehicleDefinitionId)
     {
         var url = $"VehicleParkCredit/GetVehicleCredits?vehicleDefinitionId={vehicleDefinitionId}";
         using var response = await _http.PostAsync(url, null);
-        if (!response.IsSuccessStatusCode) return new();
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Borc sorgusu basarisiz (HTTP {(int)response.StatusCode}).");
+
         var json = await response.Content.ReadAsStringAsync();
-        return JsonSerializer.Deserialize<List<VehicleCreditDto>>(json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+        var liste = JsonSerializer.Deserialize<List<VehicleCreditDto>>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (liste == null)
+            throw new HttpRequestException("Borc sorgusu cozumlenemedi (bos/bozuk yanit).");
+
+        return liste;
     }
 
     /// <summary>

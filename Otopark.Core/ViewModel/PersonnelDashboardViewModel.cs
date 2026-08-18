@@ -491,6 +491,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             return;
         }
 
+        // BOLGESIZ ISLEM YOK: BolgeId = 0 ile yazilan borc hicbir bolgeye
+        // eslesmez ve cikista borc kontrolu fiilen kapanir. Girisi bastan
+        // engellemek, sonradan duzeltilemeyen kayit uretmekten iyidir.
+        if (!BolgeGecerliMi()) return;
+
         var plate = EntryDetectedPlate.Trim();
         var photo = _entryPendingPhotoBase64;
 
@@ -608,6 +613,15 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             var entry = response.Result;
             var vehDef = entry?.VehicleDefinition;
 
+            // ===== BARIYER: GIRIS SUNUCUYA DUSER DUSMEZ AC =====
+            // Bariyer tetigi eskiden bu metodun EN SONUNDAYDI. Arada dort sunucu
+            // gidis-donusu vardi: doluluk yenileme, abonelik sorgusu, tarife ucreti,
+            // borclandirma. Uzak sunucuda bunlarin toplami saniyeleri buluyor ve
+            // arac bariyer onunde bekliyordu ("gec tetik").
+            // Artik giris kaydi olustugu ANDA tetik gider; geri kalan islemler
+            // (doluluk/abonelik/borc) arkasindan devam eder.
+            BariyeriHemenAc();
+
             // Plaka okundugunda zaten kaydedilmis snapshot'larin ilk yolunu al
             var imgPath = GetFirstSnapshotPath(isEntry: true);
 
@@ -691,8 +705,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             ShowToast($"{vehDef?.Plate ?? plate} giris kaydedildi.", true);
 
-            if (OnOpenEntryGateRequested != null)
-                await OnOpenEntryGateRequested.Invoke();
+            // NOT: Bariyer burada DEGIL, giris kaydi olusur olusmaz yukarida acilir.
 
             EntryDetectedPlate = "";
             _entryPendingPhotoBase64 = "";
@@ -701,6 +714,31 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         {
             ShowToast("API Hatasi: " + ex.Message, false);
         }
+    }
+
+    /// <summary>
+    /// Giris bariyerini BEKLEMEDEN acar (fire-and-forget).
+    ///
+    /// Neden beklemiyoruz: cagiran metot bariyerin HTTP yanitini beklerse, kamera
+    /// yavas cevap verdiginde (ya da zaman asimina ugradiginda - 5 sn) giris akisi
+    /// o kadar sure durur. Tersi de gecerli: tetik, cagiran metodun kalan sunucu
+    /// isleriyle geriye kayar. Ikisini de ayirmak icin komut ayri bir gorevde gider.
+    ///
+    /// Havuz is parcacigi kullanilir (Task.Run): arayuz is parcacigi yeni satiri
+    /// cizerken mesgul olsa bile tetik beklemez.
+    /// Hata yutulur - bariyer acilamasa da giris kaydi gecerlidir; sonucu personel
+    /// olay isleyicisinin gosterdigi toast'ta gorur.
+    /// </summary>
+    private void BariyeriHemenAc()
+    {
+        var handler = OnOpenEntryGateRequested;
+        if (handler == null) return;
+
+        _ = Task.Run(async () =>
+        {
+            try { await handler.Invoke(); }
+            catch { /* bariyer hatasi girisi bozmaz */ }
+        });
     }
 
     [RelayCommand]
@@ -998,6 +1036,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             return;
         }
 
+        // BOLGESIZ ISLEM YOK (bkz. DoApproveEntryAsync). Bolge bilinmeden
+        // "bu bolgeye ait borc" hesaplanamaz; borclu arac serbest gecerdi.
+        if (!BolgeGecerliMi()) return;
+
         var plate = ExitDetectedPlate.Trim();
 
         try
@@ -1093,8 +1135,48 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             // 4. Borc kontrolu - tum bolge borclari + bu bolgeye ait borc.
             var creditInfo = await GetVehicleDebtsAsync(vehicle.Id);
+
+            // BORC BILINMIYORSA CIKIS YOK (18.08.2026).
+            // Onceden sorgu hata verdiginde borc 0 kabul ediliyor ve borclu arac
+            // sessizce cikiyordu. Artik bilinmeyen durum cikisi DURDURUR; personel
+            // gerekirse "Borclu Cikisi Yap" ile bilincli olarak cikarabilir.
+            if (!creditInfo.basarili)
+            {
+                ShowToast(
+                    $"{plate}: Borç bilgisi alınamadı (sunucuya ulaşılamıyor). " +
+                    "Güvenlik gereği çıkış yapılmadı. Bağlantıyı kontrol edin.",
+                    false);
+                return;
+            }
+
             decimal zoneDebt = creditInfo.zoneDebt;
             decimal totalDebt = creditInfo.totalDebt;
+
+            // 4b. ABONELIK KONTROLU — BU BOLGEYE AIT MI? (18.08.2026)
+            //
+            // Cikis akisinda abonelik hic sorgulanmiyordu; abone yalnizca "borcu
+            // olmadigi icin" geciyordu. Artik acikca sorulur ve BolgeId gonderilir:
+            // sunucu, kapali otoparkta yalnizca O BOLGEYE ait aboneligi gecerli
+            // sayar. Baska bir otoparkin ya da yol kenarinin abonesi burada abone
+            // DEGILDIR; normal ucret/borc akisina duser.
+            bool aboneMi = false;
+            try
+            {
+                var cikisAbone = await _vehicleApi.CheckSubscriptionAsync(
+                    plate, UserSession.CompanyId, BolgeId);
+                aboneMi = cikisAbone != null && cikisAbone.IsSubscriber;
+                if (aboneMi)
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[CIKIS] {plate}: ABONE ({cikisAbone?.SubscriptionName}) - ucretsiz cikis.");
+            }
+            catch (Exception exAbone)
+            {
+                // Abonelik ogrenilemezse abone SAYILMAZ. Gecerli bir abonenin
+                // zaten borcu olmadigi icin asagidaki borc engeline takilmaz;
+                // yani bu varsayim aboneyi magdur etmez.
+                System.Diagnostics.Debug.WriteLine(
+                    $"[CIKIS] {plate}: abonelik sorgusu basarisiz ({exAbone.Message}).");
+            }
 
             // 5. Gunluk ucret hesabi: gece 23:59'i geçtiyse her gun icin gunluk ucret eklenir.
             var entryRow = _allVehicles.FirstOrDefault(v => v.EntryId == entryId);
@@ -1150,8 +1232,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
             catch { /* yikama durumu alinamazsa normal borc kontrolune devam edilir */ }
 
-            // 6b. Bu bolgeye ait borc varsa cikisi engelle (yikama ile karsilanmadiysa).
-            if (!washBypass && zoneDebt > 0)
+            // 6b. Bu bolgeye ait borc varsa cikisi engelle
+            //     (abone degilse VE yikama ile karsilanmadiysa).
+            //
+            // ABONE MUAFIYETI: bu otoparkin abonesi olan arac ucretsiz cikar;
+            // bariyer otomatik acilir. Sunucu tarafi da abone icin tum odeme/borc
+            // blogunu atlar, dolayisiyla cikis 0 TL olarak kaydedilir.
+            if (!aboneMi && !washBypass && zoneDebt > 0)
             {
                 var msg = $"{plate} plakali aracin {LoggedZoneName} kapali otopark icin {zoneDebt:F2} TL borcu bulunmakta. Borcu odenmeden cikis yapilamaz.";
                 if (totalDebt > zoneDebt)
@@ -1159,7 +1246,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 ShowToast(msg, false);
                 return;
             }
-            if (washBypass && zoneDebt > 0)
+            if (aboneMi)
+            {
+                ShowToast($"{plate}: Abonelik geçerli — ücretsiz çıkış yapılıyor.", true);
+            }
+            else if (washBypass && zoneDebt > 0)
             {
                 ShowToast($"{plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.", true);
             }
@@ -1324,7 +1415,15 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             if (vehicle == null || vehicle.Id == 0)
                 return (true, "", true);   // arac kaydi yoksa borc da yoktur
 
-            var (zoneDebt, _) = await GetVehicleDebtsAsync(vehicle.Id);
+            var borcBilgi = await GetVehicleDebtsAsync(vehicle.Id);
+
+            // Borc sorgusu basarisizsa "borc yok" VARSAYILMAZ: personelin bilerek
+            // borclu cikis yaptigi bu akista bile, borcu bilmeden cikarmak kaydin
+            // eksik kalmasina yol acar.
+            if (!borcBilgi.basarili)
+                return (false, $"{row.Plate}: Borç bilgisi alınamadı (sunucuya ulaşılamıyor). Çıkış yapılmadı.", false);
+
+            decimal zoneDebt = borcBilgi.zoneDebt;
 
             // Yikama fisi + ucretsiz sure DOLMAMIS -> ucret yikama ile karsilanmis, serbest cikis
             try
@@ -1462,9 +1561,41 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Aracin tum bolgelerdeki borc bilgisini doner: (kendi bolge borcu, tum bolge toplami).
+    /// Calisilan bolge belli mi? Degilse kullaniciyi uyarip false doner.
+    ///
+    /// BolgeId = 0 durumu (bolge secmeden giris yapilmis oturum) borc
+    /// kontrolunu sessizce devre disi birakiyordu: cikistaki
+    /// "c.ZoneId == BolgeId" karsilastirmasi hicbir borcu tutturamiyor,
+    /// giriste yazilan borc da ZoneId = 0 ile kaydedilip kalici olarak
+    /// hicbir bolgeye eslesmiyordu. Giris ekraninda bolge artik zorunlu;
+    /// bu kontrol ikinci savunma hattidir.
     /// </summary>
-    private async Task<(decimal zoneDebt, decimal totalDebt)> GetVehicleDebtsAsync(long vehicleDefinitionId)
+    private bool BolgeGecerliMi()
+    {
+        if (BolgeId > 0) return true;
+
+        ShowToast(
+            "Bölge seçilmemiş. Araç giriş/çıkış işlemi yapılamaz — " +
+            "lütfen çıkış yapıp bölge seçerek tekrar giriş yapın.",
+            false);
+        return false;
+    }
+
+    /// <summary>
+    /// Aracin tum bolgelerdeki borc bilgisini doner:
+    /// (sorgu basarili mi, kendi bolge borcu, tum bolge toplami).
+    ///
+    /// GUVENLI TARAF: HATA = "BILINMIYOR", "BORCU YOK" DEGIL (18.08.2026).
+    ///
+    /// Onceki hali sonunda "catch { return (0, 0); }" tasiyordu. Sunucu hata
+    /// verdiginde ya da zaman asimina ugradiginda borc SIFIR hesaplaniyor,
+    /// cikistaki "zoneDebt > 0" engeli saglanmiyor ve BORCLU ARAC BARIYERDEN
+    /// GECIYORDU — ustelik bu hicbir yere kaydedilmiyordu.
+    ///
+    /// Artik basarisizlik ayri bir bayrakla bildiriliyor; cagiran taraf cikisi
+    /// DURDURUR. Ucret hesabi zaten boyle davraniyordu; iki yol artik tutarli.
+    /// </summary>
+    private async Task<(bool basarili, decimal zoneDebt, decimal totalDebt)> GetVehicleDebtsAsync(long vehicleDefinitionId)
     {
         try
         {
@@ -1478,9 +1609,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 if (c.ZoneId.HasValue && c.ZoneId.Value == BolgeId)
                     zone += balance;
             }
-            return (zone, total);
+            return (true, zone, total);
         }
-        catch { return (0, 0); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[BORC] Sorgu BASARISIZ: {ex.Message}");
+            return (false, 0, 0);
+        }
     }
 
     /// <summary>
