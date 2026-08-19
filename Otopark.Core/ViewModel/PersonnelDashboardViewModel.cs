@@ -283,9 +283,22 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     ExitDateTime = d.ExitTimestamp,
                     EntryPlateImagePath = "",
                     ExitPlateImagePath = "",
-                    OldDebt = (decimal)d.Balance,
+                    // BORC KOLONLARI GERCEK BORCU GOSTERIR (19.08.2026).
+                    //
+                    // Onceki eslesme yanlis alanlari okuyordu:
+                    //   OldDebt   = d.Balance            -> Balance ON ODEME bakiyesidir, BORC DEGIL
+                    //   CurrentDebt = d.CalculatedFee    -> CIKISTA hesaplanir; arac iceride iken 0
+                    //   TotalDebt = d.CurrentDebitAmount -> pratikte dolmuyor
+                    // Sonuc: iceride duran borclu aracta ucc kolon da 0.00 gorunuyordu.
+                    // (Olculdu: 38ARA411'in VEHICLE_DEFINITION.CREDIT = 3 iken ekran 0.00 diyordu.)
+                    //
+                    // Aracin ACIK BORC toplami VEHICLE_DEFINITION.CREDIT alanindadir ve
+                    // DTO'da "Credit" olarak zaten geliyor. TOPLAM artik ondan okunur.
+                    // ANLIK yalnizca cikis yapilmis satirda anlamlidir (o an hesaplanan
+                    // ucret); iceride duran araclarda ESKI = toplam acik borctur.
+                    OldDebt = (decimal)Math.Max(0, d.Credit - (d.CalculatedFee ?? 0)),
                     CurrentDebt = (decimal)(d.CalculatedFee ?? 0),
-                    TotalDebt = (decimal)(d.CurrentDebitAmount ?? 0),
+                    TotalDebt = (decimal)d.Credit,
                     // Cikis yapilmissa cikis tutari hasilata sayilir; icerideki araclarda 0.
                     ExitFee = d.ExitTimestamp.HasValue ? (decimal)(d.CalculatedFee ?? 0) : 0m,
                     VehicleTypeId = d.VehicleTypeId,
@@ -1173,7 +1186,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
 
             // 4. Borc kontrolu - tum bolge borclari + bu bolgeye ait borc.
-            var creditInfo = await GetVehicleDebtsAsync(vehicle.Id);
+            var creditInfo = await GetVehicleDebtsAsync(vehicle.Id, entryId);
 
             // BORC BILINMIYORSA CIKIS YOK (18.08.2026).
             // Onceden sorgu hata verdiginde borc 0 kabul ediliyor ve borclu arac
@@ -1277,13 +1290,51 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // ABONE MUAFIYETI: bu otoparkin abonesi olan arac ucretsiz cikar;
             // bariyer otomatik acilir. Sunucu tarafi da abone icin tum odeme/borc
             // blogunu atlar, dolayisiyla cikis 0 TL olarak kaydedilir.
-            if (!aboneMi && !washBypass && zoneDebt > 0)
+            // UCRETSIZ CIKIS SERBESTTIR (19.08.2026).
+            //
+            // Sahadan: "Cikista bariyeri 0 yani ucretsiz olanlarin tamamina acmali.
+            // ENGELLI 0 TL ucret gosteriyor ama cikis acilmiyor."
+            //
+            // Sebep: engelleyen kosul zoneDebt idi ve o, aracin bu bolgedeki TUM
+            // acik borclarini topluyor — ONCEKI ziyaretlerden kalanlar dahil.
+            // Bugunku konaklamasi ucretsiz olan arac (engelli arac tipi, ucretsiz
+            // sure, cok kisa sure) eski bir borcu yuzunden bariyerde kaliyordu.
+            //
+            // Artik karar BU KONAKLAMAYA bakiyor:
+            //   - bu girise bagli acik borc var mi (creditInfo.girisBorcu)
+            //   - su anki park ucreti nedir (sunucu hesaplar; arac tipini ve
+            //     gecen sureyi bilir)
+            // Ikisi de 0 ise cikis UCRETSIZDIR ve bariyer acilir.
+            //
+            // Eski borclar SILINMEZ, kapatilmaz; kiosktan odenmeye devam eder.
+            // Yalnizca ucretsiz bir konaklamayi rehin almalari engellenir.
+            decimal buKonaklamaUcreti = 0m;
+            try
+            {
+                buKonaklamaUcreti = (decimal)await _vehicleApi.GetParkPriceAsync(entryId);
+            }
+            catch
+            {
+                // Hesaplanamadiysa ucretsiz VARSAYILMAZ; asagidaki kosul
+                // eski davranisa doner ve borc varsa cikis durur.
+                buKonaklamaUcreti = -1m;
+            }
+
+            bool ucretsizCikis = creditInfo.girisBorcu <= 0 && buKonaklamaUcreti == 0m;
+
+            if (!aboneMi && !washBypass && !ucretsizCikis && zoneDebt > 0)
             {
                 var msg = $"{plate} plakali aracin {LoggedZoneName} kapali otopark icin {zoneDebt:F2} TL borcu bulunmakta. Borcu odenmeden cikis yapilamaz.";
                 if (totalDebt > zoneDebt)
                     msg += $" (Tum bolgelerdeki toplam borc: {totalDebt:F2} TL)";
                 ShowToast(msg, false);
                 return;
+            }
+
+            if (ucretsizCikis && zoneDebt > 0)
+            {
+                // Cikis serbest ama personel eski borcu bilsin.
+                ShowToast($"{plate}: Bu park ucretsiz. Aracin bolgede {zoneDebt:F2} TL ESKI borcu var (cikis engellenmedi).", true);
             }
             if (aboneMi)
             {
@@ -1634,12 +1685,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     /// Artik basarisizlik ayri bir bayrakla bildiriliyor; cagiran taraf cikisi
     /// DURDURUR. Ucret hesabi zaten boyle davraniyordu; iki yol artik tutarli.
     /// </summary>
-    private async Task<(bool basarili, decimal zoneDebt, decimal totalDebt)> GetVehicleDebtsAsync(long vehicleDefinitionId)
+    private async Task<(bool basarili, decimal zoneDebt, decimal totalDebt, decimal girisBorcu)> GetVehicleDebtsAsync(
+        long vehicleDefinitionId, long entryId = 0)
     {
         try
         {
             var credits = await _vehicleApi.GetVehicleCreditsAsync(vehicleDefinitionId);
-            decimal zone = 0, total = 0;
+            decimal zone = 0, total = 0, giris = 0;
             foreach (var c in credits)
             {
                 var balance = c.DebtAmount - c.PaidAmount;
@@ -1647,13 +1699,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 total += balance;
                 if (c.ZoneId.HasValue && c.ZoneId.Value == BolgeId)
                     zone += balance;
+
+                // BU GIRISE ait borc — eski ziyaretlerden kalanlardan ayrilir.
+                if (entryId > 0 && c.VehicleEntryId.HasValue && c.VehicleEntryId.Value == entryId)
+                    giris += balance;
             }
-            return (true, zone, total);
+            return (true, zone, total, giris);
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[BORC] Sorgu BASARISIZ: {ex.Message}");
-            return (false, 0, 0);
+            return (false, 0, 0, 0);
         }
     }
 
@@ -1803,7 +1859,27 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         var pattern = $"{safePlate}_{prefix}_*.jpg";
 
         var candidates = System.IO.Directory.GetFiles(cacheDir, pattern);
-        if (candidates.Length == 0) return "";
+
+        // PLAKA REVIZYONU SONRASI GORSEL KAYBOLMASIN (19.08.2026).
+        //
+        // Dosya adi CEKILDIGI ANDAKI plakayla yazilir. Web'den plaka revizyonu
+        // yapilinca satirin plakasi YENI plaka olur, dosya ise ESKI plakayla
+        // duruyordur; desen tutmaz ve gorsel ekrandan kaybolur.
+        // (Sunucudaki EntryPhotoPath revizyonda DEGISMEZ; kayip yalnizca bu
+        //  yerel cache aramasindadir.)
+        //
+        // Plakayla bulunamazsa ZAMAN DAMGASINA gore aranir: giris/cikis
+        // saniyesi pratikte tekildir, bu yuzden yanlis araca ait gorsel
+        // eslesme olasiligi cok dusuktur. Yine de tolerans DAR tutulur.
+        if (candidates.Length == 0)
+        {
+            candidates = System.IO.Directory.GetFiles(cacheDir, $"*_{prefix}_*.jpg");
+            if (candidates.Length == 0) return "";
+
+            // Zaman esletmesinde tolerans en fazla 10 sn; genis pencereyle
+            // (cikis gorselindeki ±15 dk) baska araca ait kare secilebilirdi.
+            if (toleransSaniye > 10) toleransSaniye = 10;
+        }
 
         string bestPath = "";
         double bestDelta = double.MaxValue;

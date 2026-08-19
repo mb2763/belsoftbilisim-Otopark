@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace Otopark.Api.Services;
@@ -556,6 +556,14 @@ public class VehicleCreditDto
     public long? ZoneId { get; set; }
     public string? ZoneName { get; set; }
     public long? VehicleExitId { get; set; }
+
+    /// <summary>
+    /// Borcun ait oldugu GIRIS kaydi. Bu girise ait borc ile ESKI ziyaretlerden
+    /// kalan borcu ayirt etmek icin gerekli (bkz. cikis akisi).
+    /// Eski kayitlarda NULL olabilir.
+    /// </summary>
+    public long? VehicleEntryId { get; set; }
+
     public decimal DebtAmount { get; set; }
     public decimal PaidAmount { get; set; }
     public decimal Balance { get; set; }
