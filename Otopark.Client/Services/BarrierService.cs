@@ -136,18 +136,24 @@ public static class BarrierService
     /// Bekleme bu plakaya gore uygulanir. Bos birakilirsa (elle acma dugmesi gibi)
     /// tek bir ortak anahtar kullanilir; o durumda eski kuresel davranis gecerlidir.
     /// </param>
-    public static async Task<BarrierResult> OpenEntryGateAsync(string? plate = null)
+    /// <param name="beklemeyiAtla">
+    /// Personelin ELLE bastigi dugmeler icin true. Bekleme suresi plaka yanlis
+    /// okundugunda bariyerin kendiliginden tekrar acilmasini onlemek icindir;
+    /// personel bilerek bastiginda (ornegin kuyrukta arka arkaya iki arac)
+    /// komutun yutulmasi dogru degildir.
+    /// </param>
+    public static async Task<BarrierResult> OpenEntryGateAsync(string? plate = null, bool beklemeyiAtla = false)
     {
-        if (!TryEnterCooldown(isEntry: true, plate, out int remaining))
+        if (!beklemeyiAtla && !TryEnterCooldown(isEntry: true, plate, out int remaining))
             return new BarrierResult(false, $"Giris bariyeri: ayni plaka icin bekleme ({remaining} sn kaldi) — komut yutuldu.");
 
         var cmd = Build(AppConfig.Configuration["Barrier:EntryCommandUrl"], CameraConfigService.EntryUrl);
         return await SendCommandAsync(cmd, "Giris bariyeri");
     }
 
-    public static async Task<BarrierResult> OpenExitGateAsync(string? plate = null)
+    public static async Task<BarrierResult> OpenExitGateAsync(string? plate = null, bool beklemeyiAtla = false)
     {
-        if (!TryEnterCooldown(isEntry: false, plate, out int remaining))
+        if (!beklemeyiAtla && !TryEnterCooldown(isEntry: false, plate, out int remaining))
             return new BarrierResult(false, $"Cikis bariyeri: ayni plaka icin bekleme ({remaining} sn kaldi) — komut yutuldu.");
 
         var cmd = Build(AppConfig.Configuration["Barrier:ExitCommandUrl"], CameraConfigService.ExitUrl);

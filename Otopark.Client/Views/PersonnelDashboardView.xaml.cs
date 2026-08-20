@@ -995,7 +995,7 @@ namespace Otopark.Client.Views
                 }
             }
 
-            var result = await Services.BarrierService.OpenEntryGateAsync();
+            var result = await Services.BarrierService.OpenEntryGateAsync(beklemeyiAtla: true);
             if (DataContext is PersonnelDashboardViewModel vm2)
                 vm2.ShowBarrierToast(result.Success, result.Message);
         }
@@ -1035,31 +1035,27 @@ namespace Otopark.Client.Views
             vm.ShowBarrierToast(res.Success, res.Message);
         }
 
-        private void BarrierExit_Click(object sender, RoutedEventArgs e)
+        private async void BarrierExit_Click(object sender, RoutedEventArgs e)
         {
-            // MANUEL CIKIS BARIYERI DEVRE DISI (18.08.2026).
+            // MANUEL CIKIS BARIYERI - 20.08.2026'da talep uzerine YENIDEN ACILDI.
             //
-            // Eski davranis: bariyer SORGUSUZ aciliyordu ve CIKIS KAYDI DA
-            // YAZILMIYORDU. Sonuclari:
-            //   - borclu arac hicbir iz birakmadan cikabiliyordu,
-            //   - VEHICLE_PARK_EXIT olusmadigi icin arac sistemde "iceride"
-            //     kaliyor, gunluk tahakkuk servisi 24 saatte bir yeni gun borcu
-            //     yazmaya devam ediyordu ("cikmis aracin borcu artiyor").
+            // Personelin kontrolunde, SORGUSUZ acilir; kuyrukta hizli kalmasi icin
+            // burada borc kontrolu YAPILMAZ.
             //
-            // Cikis artik yalnizca kayit ureten iki yoldan yapilir:
-            //   1) Otomatik cikis  - plaka okunur, borc/abonelik kontrol edilir,
-            //   2) "Borclu Cikisi Yap" - personel onayiyla, borc kayit altina
-            //      alinarak cikarilir.
+            // 18.08'de gecici olarak kapatilmisti. Kapatma gerekcesi hala gecerli,
+            // kullanan bilsin diye buraya yaziliyor:
+            //   - bariyer acilir ama VEHICLE_PARK_EXIT OLUSMAZ,
+            //   - arac sistemde "iceride" kalir; gunluk tahakkuk servisi 24 saatte
+            //     bir yeni gun borcu yazmaya devam eder ("cikmis aracin borcu
+            //     artiyor" sikayetinin kaynagi budur),
+            //   - borclu arac hicbir iz birakmadan cikabilir.
             //
-            // Butonun kendisi XAML'de gizlendi; bu koruma, baska bir yerden
-            // (kisayol, otomasyon) tetiklenirse diye burada da duruyor.
+            // Kayit ureterek cikarmak icin "Borclu Cikisi Yap" (BorcluCikis_Click)
+            // kullanilmalidir: borc yazilir, cikis islenir, bariyer yine acilir.
 
+            var result = await Services.BarrierService.OpenExitGateAsync(beklemeyiAtla: true);
             if (DataContext is PersonnelDashboardViewModel vm3)
-            {
-                vm3.ShowBarrierToast(false,
-                    "Manuel çıkış bariyeri devre dışı. Kayıtsız çıkış yapılamaz — " +
-                    "borçlu araç için \"Borçlu Çıkışı Yap\" butonunu kullanın.");
-            }
+                vm3.ShowBarrierToast(result.Success, result.Message);
         }
 
         // ===== MANUEL YAKALAMA =====

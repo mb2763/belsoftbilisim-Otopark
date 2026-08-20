@@ -114,18 +114,16 @@
                                     <Button Content="G" Width="22" Height="18"
                                             Background="#444" Foreground="White" FontSize="9" Margin="1"
                                             Click="BarrierEntry_Click"/>
-                                    <!-- MANUEL CIKIS BARIYERI DEVRE DISI (18.08.2026):
-                                         sorgusuz aciyor ve CIKIS KAYDI YAZMIYORDU. Arac
-                                         sistemde "iceride" kaldigi icin gunluk tahakkuk
-                                         devam ediyor, borclu arac da izsiz cikabiliyordu.
-                                         Cikis icin: otomatik plaka okuma ya da
-                                         "Borclu Cikisi Yap". Kod tarafindaki koruma
-                                         PersonnelDashboardView.xaml.cs > BarrierExit_Click
-                                         icinde duruyor. -->
+                                    <!-- MANUEL CIKIS BARIYERI (20.08.2026'da yeniden acildi).
+                                         18.08'de gecici olarak gizlenmisti. DIKKAT: bu dugme
+                                         bariyeri SORGUSUZ acar ve CIKIS KAYDI YAZMAZ; arac
+                                         sistemde "iceride" kalir ve gunluk tahakkuk islemeye
+                                         devam eder. Kayit ureterek cikarmak icin
+                                         "Borclu Cikisi Yap" kullanilmalidir. -->
                                     <Button Content="C" Width="22" Height="18"
                                             Background="#444" Foreground="White" FontSize="9" Margin="1"
-                                            Click="BarrierExit_Click"
-                                            Visibility="Collapsed"/>
+                                            ToolTip="Cikis bariyerini elle acar. Cikis kaydi YAZILMAZ - arac sistemde iceride kalir."
+                                            Click="BarrierExit_Click"/>
                                 </StackPanel>
                             </StackPanel>
                             <!-- BORCLU CIKISI: secili araci borclandirarak cikarir + bariyeri acar.
