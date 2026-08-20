@@ -116,8 +116,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     [ObservableProperty] private bool isTimeMonth;
 
     // Bariyer event'leri
-    public event Func<Task>? OnOpenEntryGateRequested;
-    public event Func<Task>? OnOpenExitGateRequested;
+    // Plaka tasinir: bariyer beklemesi plaka bazli uygulanir (bkz. BarrierService).
+    public event Func<string?, Task>? OnOpenEntryGateRequested;
+    public event Func<string?, Task>? OnOpenExitGateRequested;
 
     // Fis basma event'i - code-behind'da ReceiptPrintService cagirilir
     public event Action<ReceiptInfo>? OnPrintEntryReceipt;
@@ -638,7 +639,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // arac bariyer onunde bekliyordu ("gec tetik").
             // Artik giris kaydi olustugu ANDA tetik gider; geri kalan islemler
             // (doluluk/abonelik/borc) arkasindan devam eder.
-            BariyeriHemenAc();
+            BariyeriHemenAc(vehDef?.Plate);
 
             // Plaka okundugunda zaten kaydedilmis snapshot'larin ilk yolunu al
             var imgPath = GetFirstSnapshotPath(isEntry: true);
@@ -747,14 +748,14 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     /// Hata yutulur - bariyer acilamasa da giris kaydi gecerlidir; sonucu personel
     /// olay isleyicisinin gosterdigi toast'ta gorur.
     /// </summary>
-    private void BariyeriHemenAc()
+    private void BariyeriHemenAc(string? plaka = null)
     {
         var handler = OnOpenEntryGateRequested;
         if (handler == null) return;
 
         _ = Task.Run(async () =>
         {
-            try { await handler.Invoke(); }
+            try { await handler.Invoke(plaka); }
             catch { /* bariyer hatasi girisi bozmaz */ }
         });
     }
@@ -1419,7 +1420,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             ApplyFiltersInternal();
 
             if (OnOpenExitGateRequested != null)
-                await OnOpenExitGateRequested.Invoke();
+                await OnOpenExitGateRequested.Invoke(plate);
 
             string toast = $"{plate} cikis kaydedildi. Bariyer aciliyor...";
             if (totalDebt > 0) toast += $" (Diger bolgelerde toplam borc: {totalDebt:F2} TL)";

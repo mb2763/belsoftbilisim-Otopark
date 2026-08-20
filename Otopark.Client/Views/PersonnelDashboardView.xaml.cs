@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Otopark.Client.Helpers;
 using Otopark.Core;
 using System;
@@ -118,15 +118,15 @@ namespace Otopark.Client.Views
             {
                 if (DataContext is PersonnelDashboardViewModel vm)
                 {
-                    vm.OnOpenEntryGateRequested += async () =>
+                    vm.OnOpenEntryGateRequested += async (plaka) =>
                     {
-                        var r = await Services.BarrierService.OpenEntryGateAsync();
+                        var r = await Services.BarrierService.OpenEntryGateAsync(plaka);
                         Dispatcher.Invoke(() => vm.ShowBarrierToast(r.Success, r.Message));
                     };
 
-                    vm.OnOpenExitGateRequested += async () =>
+                    vm.OnOpenExitGateRequested += async (plaka) =>
                     {
-                        var r = await Services.BarrierService.OpenExitGateAsync();
+                        var r = await Services.BarrierService.OpenExitGateAsync(plaka);
                         Dispatcher.Invoke(() => vm.ShowBarrierToast(r.Success, r.Message));
                     };
 
@@ -1031,7 +1031,7 @@ namespace Otopark.Client.Views
                 vm.ShowBarrierToast(sonuc.basarili, sonuc.mesaj);
             if (!sonuc.acilsin) return;
 
-            var res = await Services.BarrierService.OpenExitGateAsync();
+            var res = await Services.BarrierService.OpenExitGateAsync(vm.SelectedVehicle?.Plate);
             vm.ShowBarrierToast(res.Success, res.Message);
         }
 

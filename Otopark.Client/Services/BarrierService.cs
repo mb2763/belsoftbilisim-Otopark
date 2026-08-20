@@ -1,7 +1,9 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Otopark.Core.Services;
 
@@ -104,29 +106,49 @@ public static class BarrierService
 
     private static int DelayMs => int.TryParse(AppConfig.Configuration["Barrier:DelayMs"], out var d) ? d : 100;
 
-    // FIX 1 — Bariyer cooldown'u: her bariyer (Giris/Cikis) icin son acma'dan sonra
-    // belirli sn icinde yeni acma komutu YUTULUR (false don, "cooldown" log'la).
-    // Plakaya bagli degil — kuresel: aynı araba farkli plakalarla taninsa
-    // bile bariyer dakikada sadece N kez acilir.
+    // BEKLEME (cooldown) ARTIK PLAKA BAZLI (20.08.2026).
+    //
+    // ONCEKI HALI KURESELDI: bir bariyer 15 sn boyunca ikinci bir acma komutu
+    // kabul etmiyordu. Amac ayni aracin plakasi birkac kez okundugunda bariyerin
+    // tekrar tekrar acilmasini onlemekti. Yan etkisi agir oldu: KAPALI OTOPARKTA
+    // ART ARDA GELEN ARACLARDA ikinci arac odemesini yaptigi halde bariyer
+    // ACILMIYORDU (komut sessizce yutuluyordu).
+    //
+    // Artik bekleme (bariyer + PLAKA) ikilisine gore tutulur:
+    //   - AYNI plaka tekrar okunursa  -> yutulur (asil korunmak istenen durum)
+    //   - FARKLI plaka gelirse        -> bariyer HEMEN acilir
+    //
+    // Guvenlik acisindan zayiflama yok: bariyer komutu her durumda ancak
+    // giris/cikis kaydi sunucuda BASARIYLA olustuktan sonra gonderilir; cikista
+    // ayrica borc kontrolu yapilir (bkz. PersonnelDashboardViewModel).
+    //
     // appsettings.json "Barrier:CooldownSeconds" ile ayarlanir (default 15 sn).
     private static int CooldownSeconds => int.TryParse(AppConfig.Configuration["Barrier:CooldownSeconds"], out var c) ? c : 15;
-    private static DateTime _lastEntryOpenUtc = DateTime.MinValue;
-    private static DateTime _lastExitOpenUtc = DateTime.MinValue;
+    private static readonly Dictionary<string, DateTime> _sonAcma = new();
     private static readonly object _cooldownLock = new();
 
-    public static async Task<BarrierResult> OpenEntryGateAsync()
+    // Komutlar SIRAYLA gonderilir. Hikvision'da acma "high" + PulseMs sonra "low"
+    // seklinde iki adimdir; iki arac ayni anda gelirse adimlar ic ice girip roleyi
+    // acik birakabilir. Semafor bunu engeller, farkli plakalar sadece siraya girer.
+    private static readonly SemaphoreSlim _komutKilidi = new(1, 1);
+
+    /// <param name="plate">
+    /// Bekleme bu plakaya gore uygulanir. Bos birakilirsa (elle acma dugmesi gibi)
+    /// tek bir ortak anahtar kullanilir; o durumda eski kuresel davranis gecerlidir.
+    /// </param>
+    public static async Task<BarrierResult> OpenEntryGateAsync(string? plate = null)
     {
-        if (!TryEnterCooldown(isEntry: true, out int remaining))
-            return new BarrierResult(false, $"Giris bariyeri: cooldown ({remaining} sn kaldi) — komut yutuldu.");
+        if (!TryEnterCooldown(isEntry: true, plate, out int remaining))
+            return new BarrierResult(false, $"Giris bariyeri: ayni plaka icin bekleme ({remaining} sn kaldi) — komut yutuldu.");
 
         var cmd = Build(AppConfig.Configuration["Barrier:EntryCommandUrl"], CameraConfigService.EntryUrl);
         return await SendCommandAsync(cmd, "Giris bariyeri");
     }
 
-    public static async Task<BarrierResult> OpenExitGateAsync()
+    public static async Task<BarrierResult> OpenExitGateAsync(string? plate = null)
     {
-        if (!TryEnterCooldown(isEntry: false, out int remaining))
-            return new BarrierResult(false, $"Cikis bariyeri: cooldown ({remaining} sn kaldi) — komut yutuldu.");
+        if (!TryEnterCooldown(isEntry: false, plate, out int remaining))
+            return new BarrierResult(false, $"Cikis bariyeri: ayni plaka icin bekleme ({remaining} sn kaldi) — komut yutuldu.");
 
         var cmd = Build(AppConfig.Configuration["Barrier:ExitCommandUrl"], CameraConfigService.ExitUrl);
         return await SendCommandAsync(cmd, "Cikis bariyeri");
@@ -184,21 +206,40 @@ public static class BarrierService
         $"<outputState>{state}</outputState>" +
         "</IOPortData>";
 
-    private static bool TryEnterCooldown(bool isEntry, out int remainingSec)
+    private static bool TryEnterCooldown(bool isEntry, string? plate, out int remainingSec)
     {
         int cd = Math.Max(0, CooldownSeconds);
         if (cd <= 0) { remainingSec = 0; return true; }
+
+        // Anahtar: bariyer + normallestirilmis plaka. Plaka yoksa ortak anahtar.
+        string plakaAnahtari = (plate ?? "").ToUpperInvariant().Trim().Replace(" ", "");
+        if (plakaAnahtari.Length == 0) plakaAnahtari = "(plakasiz)";
+        string anahtar = (isEntry ? "G|" : "C|") + plakaAnahtari;
+
         lock (_cooldownLock)
         {
-            DateTime last = isEntry ? _lastEntryOpenUtc : _lastExitOpenUtc;
-            var elapsed = DateTime.UtcNow - last;
-            if (elapsed.TotalSeconds < cd)
+            if (_sonAcma.TryGetValue(anahtar, out var last))
             {
-                remainingSec = (int)Math.Ceiling(cd - elapsed.TotalSeconds);
-                return false;
+                var elapsed = DateTime.UtcNow - last;
+                if (elapsed.TotalSeconds < cd)
+                {
+                    remainingSec = (int)Math.Ceiling(cd - elapsed.TotalSeconds);
+                    return false;
+                }
             }
-            if (isEntry) _lastEntryOpenUtc = DateTime.UtcNow;
-            else _lastExitOpenUtc = DateTime.UtcNow;
+
+            _sonAcma[anahtar] = DateTime.UtcNow;
+
+            // Sozluk sinirsiz buyumesin: bekleme suresinin cok uzerindeki kayitlar atilir.
+            if (_sonAcma.Count > 256)
+            {
+                var esik = DateTime.UtcNow.AddSeconds(-Math.Max(cd * 4, 300));
+                var eskiler = new List<string>();
+                foreach (var kv in _sonAcma)
+                    if (kv.Value < esik) eskiler.Add(kv.Key);
+                foreach (var k in eskiler) _sonAcma.Remove(k);
+            }
+
             remainingSec = 0;
             return true;
         }
@@ -209,6 +250,8 @@ public static class BarrierService
         if (cmd == null || string.IsNullOrWhiteSpace(cmd.Url))
             return new BarrierResult(false, $"{gateName}: URL yapilandirilmamis.");
 
+        // Acma iki adimli (high -> low) oldugu icin komutlar sirayla gonderilir.
+        await _komutKilidi.WaitAsync();
         try
         {
             if (DelayMs > 0)
@@ -264,6 +307,10 @@ public static class BarrierService
         catch (Exception ex)
         {
             return new BarrierResult(false, $"{gateName}: {ex.Message}");
+        }
+        finally
+        {
+            _komutKilidi.Release();
         }
     }
 
