@@ -1128,6 +1128,68 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 catch { }
             }
 
+            // 3-ONCESI: BU ARAC AZ ONCE ZATEN CIKIS YAPMIS MI? (21.08.2026)
+            //
+            // Kuyrukta bekleyen aracin plakasi, one gecen arac cikarken kamera
+            // tarafindan ERKEN okunabiliyor. Cikis o anda islenip kaydediliyor;
+            // arac bariyere geldiginde plaka IKINCI kez okunuyor. Bu ikinci
+            // okumada artik acik giris YOK ve asagidaki blok devreye girip
+            // 15 dk oncesine HAYALET BIR GIRIS + YENI BORC uretiyordu. Personel
+            // "cikis kaydedilmedi, bariyer de acilmadi" diye goruyordu.
+            //
+            // Artik: yakin zamanda cikisi yapilmis arac icin YENI KAYIT URETILMEZ,
+            // yalnizca bariyer TEKRAR ACILIR.
+            // Cikisi yapilmis arac icin bariyer karari ZAMANA degil BORCA bakar.
+            // Pencere yalnizca akil saglama sinirIdir: saatler once cikmis bir arac
+            // girissiz sekilde bariyerde duruyorsa bu "tekrar okuma" degildir, asagidaki
+            // otomatik giris akisina dusmelidir.
+            const int TEKRAR_OKUMA_DK = 30;
+
+            if (entryId == 0)
+            {
+                var sonCikis = _allVehicles
+                    .Where(v => string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase)
+                                && v.ExitDateTime != null)
+                    .OrderByDescending(v => v.ExitDateTime)
+                    .FirstOrDefault();
+
+                bool cikisiYapilmis = sonCikis?.ExitDateTime != null &&
+                                      (DateTime.Now - sonCikis.ExitDateTime.Value).TotalMinutes <= TEKRAR_OKUMA_DK;
+
+                if (cikisiYapilmis)
+                {
+                    // CIKIS ZATEN VAR -> tek soru kalir: BORCU KAPALI MI?
+                    // Kayit uretilmez (hayalet giris + sahte borc olusuyordu).
+                    // Arac bariyerde bekledigi surece plaka tekrar tekrar okunabilir;
+                    // her okumada borc YENIDEN sorulur, tahsilat arada tamamlanirsa
+                    // ikinci ya da ucuncu denemede bariyer acilir.
+                    var borcDurumu = await GetVehicleDebtsAsync(vehicle.Id);
+
+                    if (!borcDurumu.basarili)
+                    {
+                        // Borc sorgusu basarisizsa "borcsuz" VARSAYILMAZ (fail-closed).
+                        ShowToast($"{plate}: cikisi yapilmis ancak borc sorgulanamadi. " +
+                                  "Bariyer acilmadi, tekrar deneyiniz.", false);
+                        return;
+                    }
+
+                    if (borcDurumu.zoneDebt > 0)
+                    {
+                        ShowToast($"{plate}: cikisi yapilmis fakat {borcDurumu.zoneDebt:F2} TL borcu var. " +
+                                  "Odeme yapildiktan sonra bariyer acilacak.", false);
+                        return;
+                    }
+
+                    ShowToast($"{plate}: cikisi zaten kaydedilmis " +
+                              $"({sonCikis!.ExitDateTime!.Value:HH:mm:ss}) ve borcu yok. Bariyer aciliyor.", true);
+
+                    if (OnOpenExitGateRequested != null)
+                        await OnOpenExitGateRequested.Invoke(plate);
+
+                    return;
+                }
+            }
+
             // 3. Giris yoksa OTOMATIK GIRIS olustur (15 dk oncesine).
             if (entryId == 0)
             {

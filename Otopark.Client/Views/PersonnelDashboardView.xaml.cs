@@ -126,7 +126,18 @@ namespace Otopark.Client.Views
 
                     vm.OnOpenExitGateRequested += async (plaka) =>
                     {
-                        var r = await Services.BarrierService.OpenExitGateAsync(plaka);
+                        // CIKIS BARIYERINDE BEKLEME UYGULANMAZ (21.08.2026).
+                        //
+                        // Bekleme, plaka yanlis okundugunda bariyerin kendiliginden
+                        // tekrar acilmasini onlemek icindi. Cikista bu koruma GEREKSIZ:
+                        // buraya gelinmesi icin sunucuda CIKIS KAYDI olusmus olmasi ya da
+                        // personelin bilerek islem yapmis olmasi gerekir.
+                        //
+                        // Bedeli agirdi: kuyrukta bekleyen aracin plakasi one gecen arac
+                        // cikarken ERKEN okunuyor, cikis o anda isleniyor ve bekleme
+                        // sayaci tukeniyor. Arac bariyere geldiginde ikinci okuma
+                        // "sure yutuldu" ile dusuyor, bariyer ACILMIYORDU.
+                        var r = await Services.BarrierService.OpenExitGateAsync(plaka, beklemeyiAtla: true);
                         Dispatcher.Invoke(() => vm.ShowBarrierToast(r.Success, r.Message));
                     };
 
@@ -1031,7 +1042,7 @@ namespace Otopark.Client.Views
                 vm.ShowBarrierToast(sonuc.basarili, sonuc.mesaj);
             if (!sonuc.acilsin) return;
 
-            var res = await Services.BarrierService.OpenExitGateAsync(vm.SelectedVehicle?.Plate);
+            var res = await Services.BarrierService.OpenExitGateAsync(vm.SelectedVehicle?.Plate, beklemeyiAtla: true);
             vm.ShowBarrierToast(res.Success, res.Message);
         }
 
