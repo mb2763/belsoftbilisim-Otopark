@@ -98,7 +98,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Son Giren 15 Araç" FontSize="18" FontWeight="Bold" Foreground="#1B2B4A" Margin="4,4,4,10"/>
+                    <TextBlock Grid.Row="0" Text="Son 1 Saatte Giren Araçlar" FontSize="18" FontWeight="Bold" Foreground="#1B2B4A" Margin="4,4,4,10"/>
                     <ListBox x:Name="EntryList" Grid.Row="1" SelectionChanged="EntryList_SelectionChanged"
                              BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
