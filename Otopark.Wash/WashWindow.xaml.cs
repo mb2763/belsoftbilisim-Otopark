@@ -1,4 +1,4 @@
-using Otopark.Api.Services;
+﻿using Otopark.Api.Services;
 using Otopark.Core.Session;
 using System;
 using System.Collections.ObjectModel;
@@ -25,6 +25,9 @@ namespace Otopark.Wash
         private System.Windows.Threading.DispatcherTimer? _tick;
         /// <summary>Son sunucu yenilemesi (ucret guncel kalsin diye periyodik yenilenir).</summary>
         private DateTime _lastServerRefresh = DateTime.MinValue;
+
+        /// <summary>Listede gosterilecek zaman araligi (dk). "Son 1 saat".</summary>
+        private const int SON_DAKIKA = 60;
 
         public WashWindow(VehicleParkApiService api)
         {
@@ -78,11 +81,23 @@ namespace Otopark.Wash
                     ResultBox.Visibility = Visibility.Collapsed;
                 }
 
-                var list = await _api.GetWashRecentEntriesAsync(UserSession.CompanyId, 15);
+                // LISTE ARTIK "SON 15 ARAC" DEGIL "SON 1 SAAT" (22.08.2026).
+                // Sabit sayi yanilticiydi: yogun saatte bir saat icinde giren araclarin
+                // bir kismi listeye hic girmiyor, sakin saatte ise saatler once girmis
+                // araclar listede kaliyordu.
+                //
+                // Suzgec HEM sunucuda HEM burada uygulanir: sunucudaki API guncellenmemis
+                // olsa da (minutes parametresini yok sayarsa) ekran dogru calisir.
+                var list = await _api.GetWashRecentEntriesAsync(
+                    UserSession.CompanyId, take: 200, minutes: SON_DAKIKA);
                 _lastServerRefresh = DateTime.Now;
+
+                var sinir = DateTime.Now.AddMinutes(-SON_DAKIKA);
 
                 foreach (var e in list)
                 {
+                    if (e.EntryTime < sinir) continue;   // API eskiyse burada elenir
+
                     Rows.Add(new WashRow
                     {
                         EntryId = e.EntryId,
@@ -111,7 +126,7 @@ namespace Otopark.Wash
                 }
 
                 if (Rows.Count == 0 && !keepSelection)
-                    SelectedInfoText.Text = "Otoparkta araç bulunmuyor.";
+                    SelectedInfoText.Text = "Son 1 saat içinde giriş yapmış araç yok.";
             }
             catch (Exception ex)
             {
@@ -273,6 +288,32 @@ namespace Otopark.Wash
 
         public bool IsExpired => Remaining <= TimeSpan.Zero;
 
+        /// <summary>
+        /// Aracin otoparkta gecirdigi sure — giris zamanindan ANLIK hesaplanir.
+        /// Sunucudan gelen MinutesIn tek seferlik bir fotograftir; bu ise geri sayimla
+        /// birlikte her saniye tazelenir.
+        /// </summary>
+        public TimeSpan IcerideSure
+        {
+            get
+            {
+                var gecen = DateTime.Now - EntryTime;
+                return gecen > TimeSpan.Zero ? gecen : TimeSpan.Zero;
+            }
+        }
+
+        /// <summary>"2 sa 15 dk iceride" / "43 dk iceride"</summary>
+        public string IcerideText
+        {
+            get
+            {
+                var s = IcerideSure;
+                return s.TotalHours >= 1
+                    ? $"{(int)s.TotalHours} sa {s.Minutes} dk içeride"
+                    : $"{s.Minutes} dk içeride";
+            }
+        }
+
         /// <summary>Listede gosterilen sure/ucret metni.</summary>
         public string CountdownText => IsExpired
             ? (Fee > 0 ? $"Süre doldu — Ücret: {Fee:0.##} ₺" : "Süre doldu — ücretli")
@@ -289,6 +330,8 @@ namespace Otopark.Wash
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsExpired)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountdownText)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountdownBrush)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IcerideSure)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IcerideText)));
         }
 
         // YIKANACAK: fis basilmis, arac cikista yikama ile karsilanacak (WASH_RECEIPT'e kalici

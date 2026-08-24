@@ -318,12 +318,17 @@ public partial class VehicleParkApiService
     /// VehiclePark/GetVehicleParkByZoneToday) liste kurulur. Boylece yikama ekrani
     /// API guncellenmemis olsa bile plakalari gosterir.
     /// </summary>
-    public async Task<List<WashEntryDto>> GetWashRecentEntriesAsync(long companyId, int take = 15)
+    /// <param name="minutes">
+    /// 0'dan buyukse yalnizca son N dakika icinde giris yapmis araclar. API guncel
+    /// degilse bu parametre yok sayilir; cagiran taraf ayrica KENDI de suzer.
+    /// </param>
+    public async Task<List<WashEntryDto>> GetWashRecentEntriesAsync(long companyId, int take = 15, int minutes = 0)
     {
         // 1) Asil uc nokta
         try
         {
-            var url = $"Wash/GetRecentEntries?companyId={companyId}&take={take}";
+            var url = $"Wash/GetRecentEntries?companyId={companyId}&take={take}"
+                      + (minutes > 0 ? $"&minutes={minutes}" : "");
             using var response = await _http.GetAsync(url);
             if (response.IsSuccessStatusCode)
             {
