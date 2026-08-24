@@ -163,6 +163,22 @@ public partial class LoginViewModel : ObservableObject
             UserSession.UserName = result.Result.UserName;
             UserSession.IsAdmin = isAdmin;
 
+            // MISAFIR ARAC ISARETLEME YETKISI: web'de tanimlanir, burada uygulanir
+            // (ayni kalibin ilk ornegi yukaridaki bolge yetkisi kontrolu).
+            // Yoneticiler her zaman yetkili; digerleri icin izin satiri aranir.
+            // Yetki servisi hatasi GIRISI ENGELLEMEZ, yalnizca dugme gizli kalir.
+            const int MISAFIR_ARAC_MENU_ID = 68;   // MenuType.GuestVehicle
+            UserSession.CanMarkGuestVehicle = isAdmin;
+            if (!isAdmin)
+            {
+                try
+                {
+                    UserSession.CanMarkGuestVehicle =
+                        await _auth.HasMenuPrivilegeAsync(result.Result.Id, MISAFIR_ARAC_MENU_ID);
+                }
+                catch { UserSession.CanMarkGuestVehicle = false; }
+            }
+
             var dashboardVm = new PersonnelDashboardViewModel(_main, vehicleApi, vehicleDefApi, zoneApiForDash, parkQuery, lookupApi);
 
             dashboardVm.LoggedUserName = result.Result.NameSurname;

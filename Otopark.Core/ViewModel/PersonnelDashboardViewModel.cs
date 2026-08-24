@@ -1587,6 +1587,25 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     ///
     /// Doner: (bariyerAcilsin, mesaj, mesajBasariliMi)
     /// </summary>
+    /// <summary>
+    /// MISAFIR ARAC ISARETI (24.08.2026).
+    ///
+    /// Sunucuda VEHICLE_PLATE_REVISION'a "MISAFIR" logu dusulur ve aciklama yazilir.
+    /// UCRET, BORC, CIKIS ve BARIYER akislarina HIC DOKUNMAZ - bilincli bir karardir:
+    /// kullanici yalnizca isaretlenmesini ve aciklama yazilmasini istedi. Yeni bir
+    /// PaymentType/EXIT_CODE uretmek dashboard'daki KK-HGS kirilimlarini ve tahsilat
+    /// raporlarini bozardi.
+    /// </summary>
+    public async Task<bool> MisafirAracIsaretleAsync(long entryId, string aciklama)
+    {
+        try
+        {
+            return await _vehicleApi.MarkGuestVehicleAsync(
+                entryId, UserSession.CompanyId, UserSession.UserId, aciklama);
+        }
+        catch { return false; }
+    }
+
     public async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapAsync(VehicleRow? row)
     {
         if (row == null || string.IsNullOrWhiteSpace(row.Plate))

@@ -196,6 +196,36 @@ public partial class VehicleParkApiService
         catch { return false; }
     }
 
+    /// <summary>
+    /// MISAFIR ARAC ISARETI (24.08.2026).
+    /// Sunucuda VEHICLE_PLATE_REVISION'a "MISAFIR" logu dusulur ve aciklama yazilir.
+    /// UCRET/CIKIS akisina etkisi YOKTUR; yalnizca isaret ve rapor icindir.
+    /// Sunucu eski surumse (uc yoksa) false doner, cagiran taraf kullaniciyi uyarir.
+    /// </summary>
+    public async Task<bool> MarkGuestVehicleAsync(long entryId, long companyId, long currentUserId, string note)
+    {
+        try
+        {
+            var url = $"VehiclePark/MarkGuestVehicle?id={entryId}&companyId={companyId}"
+                    + $"&currentUserId={currentUserId}&note={Uri.EscapeDataString(note ?? "")}";
+            using var response = await _http.PostAsync(url, null);
+            if (!response.IsSuccessStatusCode) return false;
+
+            // Sunucu ModelResult doner; hata listesi doluysa islem BASARISIZDIR.
+            var json = await response.Content.ReadAsStringAsync();
+            if (!string.IsNullOrWhiteSpace(json) &&
+                json.IndexOf("\"message\"", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                json.IndexOf("\"errors\":[]", StringComparison.OrdinalIgnoreCase) < 0 &&
+                json.IndexOf("\"errors\":null", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                // Hata dizisi bos degil -> basarisiz
+                return false;
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
     public async Task<DeleteEntryResponse?> CancelEntryAsync(long entryId, long companyId, long currentUserId, string reason)
     {
         var url = $"VehiclePark/CancelVehicleParkEntry?id={entryId}&companyId={companyId}"

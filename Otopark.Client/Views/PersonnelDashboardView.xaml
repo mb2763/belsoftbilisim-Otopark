@@ -136,6 +136,18 @@
                                         ToolTip="Seçili aracı borçlandırarak çıkarır ve bariyeri açar"
                                         Click="BorcluCikis_Click"/>
                             </StackPanel>
+                            <!-- MISAFIR ARAC: secili araci "misafir" olarak isaretler ve aciklama yazar.
+                                 UCRETE VE CIKISA ETKISI YOKTUR; yalnizca kayit + rapor icindir.
+                                 Dugme, web'de "Misafir Arac Isaretleme" yetkisi olmayan
+                                 kullanicilarda GIZLENIR (kod arkasinda ayarlanir). -->
+                            <StackPanel x:Name="PnlMisafirArac" Margin="6,3,3,3" VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                <Button x:Name="BtnMisafirArac" Content="Misafir Araç"
+                                        Width="118" Height="48" FontSize="10" FontWeight="Bold"
+                                        Background="#1565C0" Foreground="White" BorderThickness="0" Cursor="Hand"
+                                        ToolTip="Seçili aracı misafir olarak işaretler ve açıklama yazar (ücreti değiştirmez)"
+                                        Click="MisafirArac_Click"/>
+                            </StackPanel>
 
                             <!-- Kameralari durdur/baslat: giris-cikis islemeyi acar/kapatir -->
                             <StackPanel Margin="6,3,3,3" VerticalAlignment="Center">

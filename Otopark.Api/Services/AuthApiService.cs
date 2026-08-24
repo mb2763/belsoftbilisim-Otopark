@@ -49,6 +49,48 @@ public sealed class AuthApiService
         _http = http;
     }
 
+    /// <summary>
+    /// KULLANICI MENU YETKISI SORGUSU (24.08.2026).
+    ///
+    /// "Web'de tanimla, exe'de uygula" kalibinin ikinci ornegi (birincisi
+    /// GetAuthorizedZonesAsync). Sunucu VEW_USER_PRIVILEGE listesi doner;
+    /// burada yalnizca istenen menu icin satir VAR MI diye bakilir.
+    ///
+    /// FAIL-OPEN DEGIL, FAIL-CLOSED: servis hatasi ya da eski sunucu surumunde
+    /// false doner (dugme gizli kalir). Yetki isteyen bir ozellik icin dogru
+    /// varsayilan budur; yoneticiler icin cagiran taraf zaten ayrica gecer.
+    /// </summary>
+    public async Task<bool> HasMenuPrivilegeAsync(long userId, int menuTypeId)
+    {
+        try
+        {
+            var url = $"UserPrivileges/GetPrivileges?userId={userId}";
+            using var response = await _http.PostAsync(url, null);
+            if (!response.IsSuccessStatusCode) return false;
+
+            var json = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(json)) return false;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return false;
+
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                foreach (var prop in el.EnumerateObject())
+                {
+                    if (!prop.NameEquals("menuTypeId") &&
+                        !string.Equals(prop.Name, "MenuTypeId", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (prop.Value.TryGetInt32(out var deger) && deger == menuTypeId)
+                        return true;
+                }
+            }
+            return false;
+        }
+        catch { return false; }
+    }
+
     public async Task<LoginResponse?> LoginAsync(LoginRequest req)
     {
         // Endpoint: /Login/LoginControl (POST)

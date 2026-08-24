@@ -112,6 +112,15 @@ namespace Otopark.Client.Views
             // uzerine yaziyordu -> oksuz FileSystemWatcher'lar olay firlatmaya devam ediyordu.
             // Artik tek sefer baslar (Loaded birden fazla kez tetiklenebilir, bayrakla korunur).
             Loaded += (_, __) => { if (!_started) { _started = true; Start(); } };
+
+            // MISAFIR ARAC dugmesi YETKIYE bagli. Yetki giriste bir kez cekilir
+            // (LoginViewModel); servise ulasilamadiysa false kalir ve dugme gizli olur.
+            Loaded += (_, __) =>
+            {
+                PnlMisafirArac.Visibility = Otopark.Core.Session.UserSession.CanMarkGuestVehicle
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            };
             Unloaded += (_, __) => Stop();
 
             DataContextChanged += (_, __) =>
@@ -1044,6 +1053,45 @@ namespace Otopark.Client.Views
 
             var res = await Services.BarrierService.OpenExitGateAsync(vm.SelectedVehicle?.Plate, beklemeyiAtla: true);
             vm.ShowBarrierToast(res.Success, res.Message);
+        }
+
+        /// <summary>
+        /// MISAFIR ARAC (24.08.2026): secili araci "misafir" olarak isaretler ve
+        /// personelden ACIKLAMA alir.
+        ///
+        /// UCRET/BORC/CIKIS AKISINA DOKUNMAZ. Kullanici "ucretsiz ciksin" demedi;
+        /// isaretlenmesini ve aciklama yazilmasini istedi. Isaret sunucuda
+        /// VEHICLE_PLATE_REVISION'a "MISAFIR" olarak loglanir ve web'deki
+        /// "Iptal / Plaka Islem Raporu" ekraninda listelenir.
+        /// </summary>
+        private async void MisafirArac_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is not PersonnelDashboardViewModel vm) return;
+
+            if (vm.SelectedVehicle == null)
+            {
+                vm.ShowBarrierToast(false, "Once listeden arac seciniz.");
+                return;
+            }
+
+            var plaka = vm.SelectedVehicle.Plate ?? "";
+            var entryId = vm.SelectedVehicle.EntryId;
+
+            if (entryId <= 0)
+            {
+                vm.ShowBarrierToast(false, $"{plaka}: giris kaydi bulunamadi, isaretlenemedi.");
+                return;
+            }
+
+            var pencere = new GuestNoteWindow(plaka) { Owner = Window.GetWindow(this) };
+            if (pencere.ShowDialog() != true) return;
+
+            var basarili = await vm.MisafirAracIsaretleAsync(entryId, pencere.Note);
+
+            vm.ShowBarrierToast(basarili,
+                basarili
+                    ? $"{plaka}: misafir arac olarak isaretlendi."
+                    : $"{plaka}: misafir arac isareti KAYDEDILEMEDI. Sunucu guncel mi kontrol ediniz.");
         }
 
         private async void BarrierExit_Click(object sender, RoutedEventArgs e)
