@@ -29,6 +29,15 @@ namespace Otopark.Wash
         /// <summary>Listede gosterilecek zaman araligi (dk). "Son 1 saat".</summary>
         private const int SON_DAKIKA = 60;
 
+        /// <summary>
+        /// YIKANACAKLAR paneli icin pencere (dk). Sag liste "son 1 saat" olarak KALIR;
+        /// fisi basilmis arac girisinin uzerinden bir saat gecse de bu panelde kalmalidir,
+        /// cunku ucretsiz suresi (varsayilan 120 dk) hala devam ediyor olabilir.
+        /// 22.08'de liste "son 1 saat"e cevrilince fisli araclar 61. dakikada panelden
+        /// dusuyor, kartla birlikte geri sayimlari da kayboluyordu.
+        /// </summary>
+        private const int YIKANACAK_DAKIKA = 480;
+
         public WashWindow(VehicleParkApiService api)
         {
             InitializeComponent();
@@ -88,17 +97,21 @@ namespace Otopark.Wash
                 //
                 // Suzgec HEM sunucuda HEM burada uygulanir: sunucudaki API guncellenmemis
                 // olsa da (minutes parametresini yok sayarsa) ekran dogru calisir.
+                // Sunucudan GENIS pencere istenir, sag liste burada 1 saate suzulur.
+                // Boylece YIKANACAKLAR paneli sag listenin penceresine bagimli kalmaz.
                 var list = await _api.GetWashRecentEntriesAsync(
-                    UserSession.CompanyId, take: 200, minutes: SON_DAKIKA);
+                    UserSession.CompanyId, take: 200, minutes: YIKANACAK_DAKIKA);
                 _lastServerRefresh = DateTime.Now;
 
                 var sinir = DateTime.Now.AddMinutes(-SON_DAKIKA);
+                var genisSinir = DateTime.Now.AddMinutes(-YIKANACAK_DAKIKA);
+                var tumSatirlar = new List<WashRow>();
 
                 foreach (var e in list)
                 {
-                    if (e.EntryTime < sinir) continue;   // API eskiyse burada elenir
+                    if (e.EntryTime < genisSinir) continue;   // API eskiyse burada elenir
 
-                    Rows.Add(new WashRow
+                    var satir = new WashRow
                     {
                         EntryId = e.EntryId,
                         Plate = e.Plate ?? "",
@@ -107,12 +120,17 @@ namespace Otopark.Wash
                         AlreadyWashed = e.AlreadyWashed,
                         FreeMinutes = e.FreeMinutes > 0 ? e.FreeMinutes : 120,
                         Fee = e.Fee
-                    });
+                    };
+                    tumSatirlar.Add(satir);
+
+                    // SAG LISTE: davranis aynen korunur -> son 1 saatte giren araclar.
+                    if (e.EntryTime >= sinir) Rows.Add(satir);
                 }
 
                 // YIKANACAKLAR listesi: fisi basilmis araclar ayri panelde toplanir.
+                // Sag listenin 1 saatlik penceresinden BAGIMSIZ beslenir.
                 WashRows.Clear();
-                foreach (var r in Rows.Where(r => r.AlreadyWashed).OrderBy(r => r.Remaining))
+                foreach (var r in tumSatirlar.Where(r => r.AlreadyWashed).OrderBy(r => r.Remaining))
                     WashRows.Add(r);
                 WashListInfoText.Text = WashRows.Count == 0
                     ? "Fişi basılan araç yok"
@@ -196,16 +214,34 @@ namespace Otopark.Wash
                     ResultBox.Background = (Brush)new BrushConverter().ConvertFrom("#FFF7ED")!;
                     ResultTitle.Foreground = (Brush)new BrushConverter().ConvertFrom("#C2410C")!;
                 }
+                // SOL PANELDE KALAN DAKIKA (24.08.2026): personel fisi basinca ucretsiz
+                // sureden ne kadar kaldigini ortadaki karti aramadan burada da gorsun.
+                // Deger DONUKTUR (geri saymaz), bu yuzden "Fis aninda kalan" diye
+                // etiketlendi; canli geri sayim YIKANACAKLAR kartinda zaten var.
+                // FreeMinutes 0 gelirse (sunucu bildirmediyse) kalan satiri hic yazilmaz;
+                // aksi halde baslikta "UCRETSIZ", altta "sure doldu" celiskisi olusurdu.
+                int serbestDk = res.FreeMinutes;
+                int kalanDk = serbestDk - res.MinutesIn;
                 ResultDetail.Text =
                     $"Plaka: {res.Plate}\n" +
                     $"Giriş: {res.EntryTime:dd.MM.yyyy HH:mm}\n" +
-                    $"İçeride: {res.MinutesIn} dk\n" +
+                    $"İçeride: {res.MinutesIn} dk  ·  Ücretsiz süre: {serbestDk} dk\n" +
+                    (serbestDk > 0
+                        ? (kalanDk > 0 ? $"Fiş anında kalan: {kalanDk} dk\n" : "Ücretsiz süre doldu\n")
+                        : "") +
                     $"Fiş Saati: {res.ReceiptTime:dd.MM.yyyy HH:mm}\n" +
                     $"Tutar: {res.ChargedAmount:0.##} TL";
 
                 PrintReceiptDocument(res);
 
                 await LoadAsync();
+
+                // FIS SONUCU KUTUSU LoadAsync ICINDE GIZLENIYORDU.
+                // LoadAsync (keepSelection=false) secimi sifirlarken ResultBox'i
+                // Collapsed yapiyor; kutu WPF hic cizmeden kayboluyordu, yani personel
+                // fis sonucunu ve kalan dakikayi HIC goremiyordu. Metinler duruyor,
+                // liste yenilendikten SONRA kutu tekrar gosteriliyor.
+                ResultBox.Visibility = Visibility.Visible;
             }
             catch (Exception ex)
             {

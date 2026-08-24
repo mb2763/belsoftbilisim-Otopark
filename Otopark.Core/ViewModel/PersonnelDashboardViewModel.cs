@@ -1175,9 +1175,36 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
                     if (borcDurumu.zoneDebt > 0)
                     {
-                        ShowToast($"{plate}: cikisi yapilmis fakat {borcDurumu.zoneDebt:F2} TL borcu var. " +
-                                  "Odeme yapildiktan sonra bariyer acilacak.", false);
-                        return;
+                        // YIKAMA ISTISNASI (24.08.2026) - normal cikis yolundaki kuralin ayni si.
+                        //
+                        // Sahadan gelen sikayet: yikama fisi basilmis arac bariyerin onunde
+                        // kaliyordu. Sebep: yikama bypass'li cikista giriste yazilan otopark
+                        // borcu KAPATILMIYOR; arac bariyerde beklerken plaka ikinci kez
+                        // okununca bu dala dusuluyor ve acik borc yuzunden bariyer acilmiyordu.
+                        // Normal cikis yolunda yikama istisnasi VARDI, burada YOKTU.
+                        //
+                        // Sorgu YALNIZCA borc varken yapilir: borcsuz tekrar okumada
+                        // fazladan istek olmaz, bariyer eskisi gibi aninda acilir.
+                        // Yikama durumu alinamazsa istisna UYGULANMAZ (fail-closed),
+                        // yani borclu arac bedava cikamaz.
+                        bool yikamaIleGecsin = false;
+                        if (sonCikis!.EntryId > 0)
+                        {
+                            try
+                            {
+                                var yikamaDurumu = await _vehicleApi.GetWashStatusAsync(
+                                    UserSession.CompanyId, sonCikis.EntryId);
+                                yikamaIleGecsin = yikamaDurumu.HasWashReceipt && !yikamaDurumu.IsExpired;
+                            }
+                            catch { /* yikama durumu alinamazsa normal borc kontrolu calisir */ }
+                        }
+
+                        if (!yikamaIleGecsin)
+                        {
+                            ShowToast($"{plate}: cikisi yapilmis fakat {borcDurumu.zoneDebt:F2} TL borcu var. " +
+                                      "Odeme yapildiktan sonra bariyer acilacak.", false);
+                            return;
+                        }
                     }
 
                     ShowToast($"{plate}: cikisi zaten kaydedilmis " +
@@ -1405,7 +1432,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
             else if (washBypass && zoneDebt > 0)
             {
-                ShowToast($"{plate}: Otopark ücreti yıkama ile karşılandı, borç ödendi olarak işaretlendi.", true);
+                // DIKKAT: burada borc KAPATILMIYOR - yalnizca cikis engeli kaldiriliyor.
+                // Eski metin "borc odendi olarak isaretlendi" diyordu; kodda boyle bir
+                // isaretleme YOK. Giriste yazilan VEHICLE_CREDIT satiri acik kalir.
+                // Personel borcu tahsil edilmis sanip para istemiyordu; metin gercege cekildi.
+                ShowToast($"{plate}: Yıkama fişi geçerli, çıkış serbest. Otopark borcu ({zoneDebt:F2} TL) açık kalmaya devam ediyor.", true);
             }
 
             // 7. Cikis API

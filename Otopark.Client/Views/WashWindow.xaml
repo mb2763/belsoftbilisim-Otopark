@@ -1,4 +1,4 @@
-<Window x:Class="Otopark.Client.Views.WashWindow"
+﻿<Window x:Class="Otopark.Client.Views.WashWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Yıkama Ekranı" Height="720" Width="1080"
@@ -77,6 +77,8 @@
                                         <StackPanel>
                                             <TextBlock Text="{Binding Plate}" FontSize="24" FontWeight="Bold" Foreground="#111827"/>
                                             <TextBlock Text="{Binding MinutesIn, StringFormat='{}{0} dk içeride'}" FontSize="14" Foreground="#6B7280"/>
+                                            <TextBlock Text="{Binding KalanText}" Foreground="{Binding KalanBrush}"
+                                                       FontSize="14" FontWeight="SemiBold"/>
                                         </StackPanel>
                                         <Border Grid.Column="1" VerticalAlignment="Center" CornerRadius="6" Padding="8,4"
                                                 Background="{Binding WashedBrush}">

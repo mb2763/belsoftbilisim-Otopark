@@ -1,4 +1,4 @@
-using Otopark.Api.Services;
+﻿using Otopark.Api.Services;
 using Otopark.Core.Session;
 using System;
 using System.Collections.Generic;
@@ -44,7 +44,8 @@ namespace Otopark.Client.Views
                         Plate = e.Plate ?? "",
                         MinutesIn = e.MinutesIn,
                         EntryTime = e.EntryTime,
-                        AlreadyWashed = e.AlreadyWashed
+                        AlreadyWashed = e.AlreadyWashed,
+                        RemainingMinutes = e.RemainingMinutes
                     });
                 }
                 if (Rows.Count == 0)
@@ -190,6 +191,26 @@ namespace Otopark.Client.Views
         public int MinutesIn { get; set; }
         public DateTime EntryTime { get; set; }
         public bool AlreadyWashed { get; set; }
+
+        /// <summary>
+        /// Ucretsiz sureden kalan dakika. SUNUCUNUN hesabidir (WashController),
+        /// istemci saatiyle yeniden hesaplanmaz; otopark bilgisayarinin saati
+        /// kaymissa kartta celiskili iki sayi cikmasin diye boyle secildi.
+        /// </summary>
+        public int RemainingMinutes { get; set; }
+
+        /// <summary>
+        /// Fisi basilmis araclarda kalan sure. Deger, listenin yenilendigi ana aittir
+        /// (bu ekranda geri sayim yok; "Yenile" ile tazelenir).
+        /// </summary>
+        public string KalanText => !AlreadyWashed
+            ? ""
+            : (RemainingMinutes > 0 ? $"Kalan: {RemainingMinutes} dk" : "Ücretsiz süre doldu");
+
+        /// <summary>Suresi dolan KIRMIZI. Yesil bu sistemde "ucretsiz/devam ediyor" demek.</summary>
+        public Brush KalanBrush => RemainingMinutes > 0
+            ? (Brush)new BrushConverter().ConvertFrom("#059669")!
+            : (Brush)new BrushConverter().ConvertFrom("#DC2626")!;
 
         public string WashedText => AlreadyWashed ? "FİŞLİ" : "BEKLİYOR";
         public Brush WashedBrush => AlreadyWashed
