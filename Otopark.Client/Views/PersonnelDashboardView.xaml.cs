@@ -1115,7 +1115,20 @@ namespace Otopark.Client.Views
 
             var result = await Services.BarrierService.OpenExitGateAsync(beklemeyiAtla: true);
             if (DataContext is PersonnelDashboardViewModel vm3)
-                vm3.ShowBarrierToast(result.Success, result.Message);
+            {
+                // KAYIT OLUSMADIGI PERSONELE ACIKCA SOYLENIR (26.08.2026).
+                // Bu dugme bariyeri sorgusuz acar ve CIKIS KAYDI YAZMAZ (tasarim
+                // geregi). Eskiden yalnizca "bariyer acildi" deniyordu; personel
+                // aracin sistemden dustugunu saniyordu. Oysa giris ACIK kaliyor,
+                // gunluk tahakkuk borc yazmaya devam ediyor ve arac "iceride"
+                // gorunuyor - HUNAT'ta takili kalan araclarin bir kismi boyle olustu.
+                var mesaj = result.Success
+                    ? result.Message + "  |  DIKKAT: cikis kaydi OLUSMADI, arac sistemde ICERIDE kalir. " +
+                      "Kayit olusmasi icin listeden araci secip 'Borclu Cikisi Yap' kullanin."
+                    : result.Message;
+
+                vm3.ShowBarrierToast(result.Success, mesaj);
+            }
         }
 
         // ===== MANUEL YAKALAMA =====

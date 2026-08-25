@@ -1706,12 +1706,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // Kayitli borc yoksa (nadiren) hesaplanan ucrete duselir.
             decimal borc = zoneDebt > 0 ? zoneDebt : parkUcreti;
 
-            // Ne kayitli borc ne de ucret varsa normal serbest cikis
-            if (borc <= 0)
-                return (true, "", true);
+            // ===== BORCSUZ CIKISTA DA KAYIT YAZILIR (26.08.2026 - saha vakasi) =====
+            //
+            // ONCEDEN BURADA "return (true, \"\", true);" VARDI: borc 0 ise bariyer
+            // aciliyor ama VEHICLE_PARK_EXIT HIC OLUSMUYORDU. Musteri kiosktan
+            // odeyip geldiginde borc zaten 0'a dustugu icin tam da bu dala
+            // dusuluyor; arac cikiyor, sistemde SONSUZA KADAR "iceride" kaliyordu.
+            // HUNAT'ta 25.08'de takili kalan araclarin bir kismi bu yolla olustu
+            // ("borcu odenmis ama cikisi yok" kohortu).
+            //
+            // Artik erken donus YOK: akis asagidaki cikis kaydi blogunda devam eder.
+            // Yalnizca PERSONEL ONAYI atlanir - borc yoksa soracak bir sey yoktur.
+            bool borcsuzCikis = borc <= 0;
 
-            // ---- BORCLU ARAC: personele onay sor ----
-            bool onay = OnConfirmRequired != null
+            // ---- BORCLU ARAC: personele onay sor (borcsuzda SORULMAZ) ----
+            bool onay = borcsuzCikis
+                ? true
+                : OnConfirmRequired != null
                 ? await OnConfirmRequired.Invoke(
                     "Borclu Cikisi Yap",
                     $"{row.Plate} plakali aracin {borc:0.##} TL borcu var.\n\n" +
@@ -1728,8 +1739,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 return (false, $"{row.Plate}: Islem iptal edildi. Borc {borc:0.##} TL.", false);
 
             // ACIKLAMA'ya dusulecek personel notu
-            string personelNotu =
-                $"Personel bariyeri acti - borclandirilarak cikis yapildi ({LoggedZoneName}, Kullanici: {UserSession.UserId})";
+            string personelNotu = borcsuzCikis
+                ? $"Borcsuz cikis - kayit olusturuldu ({LoggedZoneName}, Kullanici: {UserSession.UserId})"
+                : $"Personel bariyeri acti - borclandirilarak cikis yapildi ({LoggedZoneName}, Kullanici: {UserSession.UserId})";
 
             // ---- CIKIS KAYDI: ucret + "Odeme Yapilmadi" ile ----
             // ONEMLI: Borcu ISTEMCI YAZMAZ. Cikis istegi
@@ -1797,6 +1809,12 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 {
                     return (false, $"{row.Plate}: Cikis kaydedilemedi ({exC.Message}). Bariyer acilmadi.", false);
                 }
+            }
+            else if (borcsuzCikis)
+            {
+                // Acik giris YOK (row.EntryId = 0 ya da cikisi zaten yapilmis).
+                // Yazacak bir cikis kaydi da yok; bariyer eskisi gibi acilir.
+                return (true, "", true);
             }
 
             // ACIKLAMA'ya personel notu (giris + olusan cikis kaydina)
