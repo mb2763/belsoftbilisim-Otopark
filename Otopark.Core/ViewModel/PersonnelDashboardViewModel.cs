@@ -763,6 +763,60 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     [RelayCommand]
     private async Task ApproveEntryAsync() => await DoApproveEntryAsync();
 
+    /// <summary>Kuyruga alinmis GIRIS islemleri icin kilit.</summary>
+    private readonly SemaphoreSlim _girisKilidi = new SemaphoreSlim(1, 1);
+    private int _girisKuyrugu = 0;
+
+    /// <summary>
+    /// ART ARDA GELEN ARACLARDA GIRIS (25.08.2026).
+    ///
+    /// Cikis tarafiyla AYNI kusur: otomatik onay,
+    /// ApproveEntryCommand.CanExecute(null) false ise plakayi SESSIZCE dusuruyordu.
+    /// AsyncRelayCommand es zamanli calismaya izin vermedigi icin, onceki aracin
+    /// girisi islenirken bu kosul her zaman false oluyordu.
+    ///
+    /// GIRISTE SONUCU DAHA AGIR: kayit hic olusmaz, dolayisiyla borc da YAZILMAZ.
+    /// Arac icerideyken sistemde gorunmez ve cikista "girisi yok" muamelesi gorur;
+    /// ucret tahsil edilemez. Bu yuzden cikisla ayni sekilde SIRAYA ALINIYOR.
+    /// </summary>
+    public async Task GirisiSirayaAlAsync(string plate, string photoBase64)
+    {
+        const int MAX_BEKLEYEN = 3;
+        const int BEKLEME_SANIYE = 45;
+
+        if (_girisKuyrugu >= MAX_BEKLEYEN)
+        {
+            ShowToast($"{plate}: giris kuyrugu dolu, islem yapilamadi. Lutfen tekrar okutunuz.", false);
+            return;
+        }
+
+        System.Threading.Interlocked.Increment(ref _girisKuyrugu);
+        try
+        {
+            if (!await _girisKilidi.WaitAsync(TimeSpan.FromSeconds(BEKLEME_SANIYE)))
+            {
+                ShowToast($"{plate}: onceki islem uzun surdu, giris yapilamadi. Tekrar okutunuz.", false);
+                return;
+            }
+
+            try
+            {
+                // Kuyrukta beklerken baska bir okuma bu alanlari degistirmis olabilir;
+                // kendi degerlerimizle YENIDEN kuruyoruz.
+                SetPendingEntry(plate, photoBase64);
+                await DoApproveEntryAsync();
+            }
+            finally
+            {
+                _girisKilidi.Release();
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Decrement(ref _girisKuyrugu);
+        }
+    }
+
     // ===== KACIRMALARDAN ICERI AL =====
 
     [ObservableProperty] private string missedPlateInput = "";
@@ -1861,6 +1915,79 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     [RelayCommand]
     private async Task ApproveExitAsync() => await DoApproveExitAsync();
+
+    /// <summary>
+    /// Kuyruga alinmis cikis islemleri icin kilit.
+    /// </summary>
+    private readonly SemaphoreSlim _cikisKilidi = new SemaphoreSlim(1, 1);
+
+    /// <summary>Kuyrukta bekleyen cikis sayisi (log/uyari icin).</summary>
+    private int _cikisKuyrugu = 0;
+
+    /// <summary>
+    /// ART ARDA GELEN ARACLARDA CIKIS (25.08.2026 - saha videosu).
+    ///
+    /// SORUN: Otomatik onay, ApproveExitCommand.CanExecute(null) false ise plakayi
+    /// SESSIZCE dusuruyordu. [RelayCommand] async metotta AsyncRelayCommand uretir ve
+    /// CommunityToolkit 8.4'te es zamanli calisma varsayilan olarak KAPALIDIR; yani
+    /// onceki aracin cikisi islenirken CanExecute FALSE doner.
+    /// Sonuc: bariyerde ust uste gelen 2. arac icin ne cikis kaydi olusuyor ne bariyer
+    /// aciliyor ne de ekranda uyari cikiyordu - yalnizca log dosyasina bir satir
+    /// dusuyordu. 3. arac (ilk islem bittigi icin) normal calisiyordu.
+    ///
+    /// COZUM: DUSURME, SIRAYA AL. Cagrilar bu kilitle seri hale getiriliyor; bekleyen
+    /// arac oncekinin isi bitince kendi sirasinda isleniyor.
+    ///
+    /// Es zamanli calistirmak (AllowConcurrentExecutions) BILEREK tercih edilmedi:
+    /// ayni anda iki cikis istegi bariyer komutlarini ve borc sorgularini ic ice
+    /// sokardi.
+    ///
+    /// KUYRUK SINIRI: ayni anda en fazla MAX_BEKLEYEN arac beklenir. Kamera ayni
+    /// plakayi tekrar tekrar okursa kuyruk sisip dakikalar sonra alakasiz cikislar
+    /// islenmesin diye. Sinir asilirsa personele uyari gosterilir.
+    /// </summary>
+    public async Task CikisiSirayaAlAsync(string plate, string[] snapshotPaths, string entryImagePath)
+    {
+        const int MAX_BEKLEYEN = 3;
+        const int BEKLEME_SANIYE = 45;
+
+        if (_cikisKuyrugu >= MAX_BEKLEYEN)
+        {
+            ShowToast($"{plate}: cikis kuyrugu dolu, islem yapilamadi. Lutfen tekrar okutunuz.", false);
+            return;
+        }
+
+        System.Threading.Interlocked.Increment(ref _cikisKuyrugu);
+        try
+        {
+            // Sirasi gelene kadar bekler. Onceki islem takilirsa sonsuza kadar
+            // beklenmez; sure asiminda personel bilgilendirilir.
+            if (!await _cikisKilidi.WaitAsync(TimeSpan.FromSeconds(BEKLEME_SANIYE)))
+            {
+                ShowToast($"{plate}: onceki islem uzun surdu, cikis yapilamadi. Tekrar okutunuz.", false);
+                return;
+            }
+
+            try
+            {
+                // Kuyrukta beklerken bu alanlar baska bir okuma tarafindan
+                // degistirilmis olabilir; kendi degerlerimizle YENIDEN kuruyoruz.
+                ExitDetectedPlate = plate;
+                ExitPlateSnapshotPaths = snapshotPaths ?? Array.Empty<string>();
+                ExitEntryImagePath = entryImagePath ?? "";
+
+                await DoApproveExitAsync();
+            }
+            finally
+            {
+                _cikisKilidi.Release();
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Decrement(ref _cikisKuyrugu);
+        }
+    }
 
     [RelayCommand]
     private async Task ApproveAndPrintExitAsync()

@@ -730,15 +730,12 @@ namespace Otopark.Client.Views
 
                         if (autoApprove)
                         {
-                            if (vm.ApproveEntryCommand.CanExecute(null))
-                            {
-                                Log($"[{side}] OTO-ONAY tetikleniyor: '{stable.Plate}'");
-                                await vm.ApproveEntryCommand.ExecuteAsync(null);
-                            }
-                            else
-                            {
-                                Log($"[{side}] OTO-ONAY iptal: ApproveEntryCommand.CanExecute=false");
-                            }
+                            // Cikis tarafiyla ayni duzeltme: komut yerine kuyruklu metot.
+                            // Onceki arac islenirken CanExecute false donuyor ve plaka
+                            // SESSIZCE dusuruluyordu; giriste bunun bedeli daha agir
+                            // (kayit yok -> borc yok -> arac bedava kaliyor).
+                            Log($"[{side}] OTO-ONAY (kuyruklu) tetikleniyor: '{stable.Plate}'");
+                            await vm.GirisiSirayaAlAsync(stable.Plate, base64);
                         }
                     }
                     else
@@ -749,15 +746,19 @@ namespace Otopark.Client.Views
 
                         if (autoApprove)
                         {
-                            if (vm.ApproveExitCommand.CanExecute(null))
-                            {
-                                Log($"[{side}] OTO-ONAY tetikleniyor: '{stable.Plate}'");
-                                await vm.ApproveExitCommand.ExecuteAsync(null);
-                            }
-                            else
-                            {
-                                Log($"[{side}] OTO-ONAY iptal: ApproveExitCommand.CanExecute=false");
-                            }
+                            // ART ARDA GELEN ARACLAR (25.08.2026 - saha videosu).
+                            //
+                            // ONCEDEN: ApproveExitCommand.CanExecute(null) false ise plaka
+                            // SESSIZCE dusuruluyordu. AsyncRelayCommand es zamanli calismaya
+                            // izin vermedigi icin, onceki aracin cikisi islenirken bu KOSUL
+                            // HER ZAMAN false oluyordu. Bariyerde ust uste gelen 2. arac icin
+                            // ne cikis kaydi olusuyor ne bariyer aciliyor ne de uyari cikiyordu.
+                            //
+                            // ARTIK: komut yerine kuyruklu metot cagriliyor; islem dusurulmuyor,
+                            // sirasi gelince yapiliyor.
+                            Log($"[{side}] OTO-ONAY (kuyruklu) tetikleniyor: '{stable.Plate}'");
+                            await vm.CikisiSirayaAlAsync(stable.Plate, savedSnapshots,
+                                                         vm.GetEntryImageForPlate(stable.Plate));
                         }
                     }
                 });
