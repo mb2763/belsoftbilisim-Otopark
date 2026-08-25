@@ -1165,7 +1165,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             // 2. Aktif giris var mi?
             var existingRow = _allVehicles.FirstOrDefault(v =>
-                string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+                PlakaAyniMi(v.Plate, plate) &&
                 v.ExitDateTime == null && v.ParkType != "Iptal");
 
             long entryId = existingRow?.EntryId ?? 0;
@@ -1175,7 +1175,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 {
                     var parkData = await _parkQuery.GetByZoneTodayAsync(UserSession.CompanyId, BolgeId);
                     var parkEntry = parkData.FirstOrDefault(p =>
-                        string.Equals(p.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+                        PlakaAyniMi(p.Plate, plate) &&
                         p.ExitTimestamp == null);
                     entryId = parkEntry?.EntryId ?? 0;
                 }
@@ -1202,7 +1202,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             if (entryId == 0)
             {
                 var sonCikis = _allVehicles
-                    .Where(v => string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase)
+                    .Where(v => PlakaAyniMi(v.Plate, plate)
                                 && v.ExitDateTime != null)
                     .OrderByDescending(v => v.ExitDateTime)
                     .FirstOrDefault();
@@ -1931,6 +1931,62 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         return (nowDate - entryDate).Days;
     }
 
+    /// <summary>
+    /// PLAKA KARSILASTIRMA ANAHTARI (26.08.2026 - saha vakasi).
+    ///
+    /// SORUN: Kamera OCR'i teknik olarak SADECE ASCII uretir (Tesseract whitelist
+    /// "A-Z0-9" ve LocalPlateRecognizer.NormalizePlate Turkce harfi ASCII'ye katlar).
+    /// Buna karsilik plakayi VERITABANINA yazan uclar Turkce harfi KORUYOR:
+    /// kiosk ekran klavyesi, web "Plaka Revizyon" ekrani ve sunucudaki kulture
+    /// duyarli .ToUpper() (tr-TR'de 'i' -> 'I' noktali).
+    ///
+    /// Sonuc: kayit "TUSB38" (Turkce U), kameradan gelen "TUSB38" (ASCII U) ->
+    /// OrdinalIgnoreCase karsilastirmasi TUTMAZ. entryId = 0 kalir, akis
+    /// "girisi olmayan arac" daline duser, HAYALET giris + yeni borc yazip
+    /// bariyeri ACMADAN doner. Gercek girisin cikisi HIC olusmaz ve arac
+    /// sonsuza kadar "iceride" kalir. HUNAT'ta 25.08'de takili kalan araclardan
+    /// ikisi (TUSB38, TUGE38) tam olarak bu sekilde olusmustu - o iki aracin
+    /// cikisi eski kodla KODEN IMKANSIZDI.
+    ///
+    /// COZUM: karsilastirma iki tarafta da ayni anahtara indirgeniyor.
+    /// VERITABANINDAKI PLATE DEGERI DEGISTIRILMEZ - yalnizca karsilastirma
+    /// normalize edilir; gorunen plaka oldugu gibi kalir.
+    ///
+    /// CAKISMA RISKI YOK: Turk plakalarinda Turkce'ye ozgu harf (C, G, I, O, S, U
+    /// noktali/kuyruklu bicimleri) RESMEN BULUNMAZ. Dolayisiyla yalnizca bu
+    /// harflerde ayrisan iki GERCEK plaka olamaz.
+    /// </summary>
+    public static string PlakaAnahtari(string plaka)
+    {
+        if (string.IsNullOrWhiteSpace(plaka)) return "";
+
+        var sb = new System.Text.StringBuilder(plaka.Length);
+        foreach (var ch in plaka)
+        {
+            char c;
+            switch (ch)
+            {
+                case 'ç': case 'Ç': c = 'C'; break;
+                case 'ğ': case 'Ğ': c = 'G'; break;
+                case 'ı': case 'İ': c = 'I'; break;
+                case 'ö': case 'Ö': c = 'O'; break;
+                case 'ş': case 'Ş': c = 'S'; break;
+                case 'ü': case 'Ü': c = 'U'; break;
+                default:
+                    // Harf/rakam disindaki her sey atilir: bosluk, nokta, tire.
+                    if (!char.IsLetterOrDigit(ch)) continue;
+                    c = char.ToUpperInvariant(ch);
+                    break;
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Iki plaka ayni araci mi gosteriyor? (Turkce harf ve bosluk toleransli)</summary>
+    public static bool PlakaAyniMi(string a, string b) =>
+        PlakaAnahtari(a).Length > 0 && PlakaAnahtari(a) == PlakaAnahtari(b);
+
     [RelayCommand]
     private async Task ApproveExitAsync() => await DoApproveExitAsync();
 
@@ -2070,7 +2126,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(plate)) return "";
 
         var row = _allVehicles.FirstOrDefault(v =>
-            string.Equals(v.Plate, plate, StringComparison.OrdinalIgnoreCase) &&
+            PlakaAyniMi(v.Plate, plate) &&
             !string.IsNullOrEmpty(v.EntryPlateImagePath));
 
         if (row != null && System.IO.File.Exists(row.EntryPlateImagePath))
