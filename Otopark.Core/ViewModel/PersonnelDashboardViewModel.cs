@@ -464,6 +464,24 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         try
         {
+            // ORTAK UC (27.08.2026): kapasite de, icerideki arac da web panosuyla
+            // AYNI hesaptan gelir (sunucu: ZoneManager.GetParkOccupancy).
+            // Iki ekranin farkli rakam gostermesinin sebebi kapasitenin ayri
+            // hesaplanmasiydi; artik tek kaynak var.
+            var doluluk = await _parkQuery.GetParkOccupancyAsync(UserSession.CompanyId, BolgeId);
+            if (doluluk != null)
+            {
+                // Kapasite 0 donerse bolge tanimi eksiktir; yerel deger korunur ki
+                // "Bos" sayaci aniden sifirlanmasin.
+                if (doluluk.TotalParkCapacity > 0)
+                    TotalCapacity = doluluk.TotalParkCapacity;
+
+                CurrentVehicleCount = doluluk.VehicleParkingCount;
+                EmptyParkCount = Math.Max(0, TotalCapacity - CurrentVehicleCount);
+                return;
+            }
+
+            // YEDEK YOL: ortak uc yoksa (sunucu henuz guncellenmemis) eski sayim.
             var count = await _parkQuery.GetCurrentParkedCountByZoneAsync(
                 UserSession.CompanyId, UserSession.UserId, BolgeId);
 

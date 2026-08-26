@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace Otopark.Api.Services;
@@ -91,6 +91,12 @@ public sealed class VehicleParkQueryService
     /// </summary>
     public async Task<int> GetCurrentParkedCountByZoneAsync(long companyId, long currentUserId, long zoneId)
     {
+        // ONCE ORTAK UC (27.08.2026): web panosu ile AYNI hesabi dondurur.
+        // Basarisiz olursa (eski surum sunucu, ag hatasi) asagidaki ESKI yola duser;
+        // boylece sunucu guncellenmeden once de sayac calismaya devam eder.
+        var ortak = await GetParkOccupancyAsync(companyId, zoneId);
+        if (ortak != null) return ortak.VehicleParkingCount;
+
         try
         {
             var url = "VehiclePark/GetVehicleCurrentPark";
@@ -116,6 +122,35 @@ public sealed class VehicleParkQueryService
     }
 
     /// <summary>
+    /// PARK DOLULUGU - web panosuyla ORTAK hesap (27.08.2026).
+    ///
+    /// Sunucudaki ZoneManager.GetParkOccupancy'yi cagirir; kapasite, icerideki arac,
+    /// bos yer ve doluluk orani TEK kaynaktan gelir. Uc yoksa/ulasilamazsa null doner
+    /// ve cagiran taraf eski yontemine duser.
+    ///
+    /// zoneId = 0 -> firma geneli.
+    /// </summary>
+    public async Task<ParkOccupancyDto?> GetParkOccupancyAsync(long companyId, long zoneId)
+    {
+        try
+        {
+            using var response = await _http.PostAsJsonAsync("VehiclePark/GetParkOccupancy", new
+            {
+                companyId = companyId,
+                entryZoneId = zoneId
+            });
+
+            if (!response.IsSuccessStatusCode) return null;
+
+            return await response.Content.ReadFromJsonAsync<ParkOccupancyDto>(JsonOpts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// KARA LISTE: bolgede odenmemis (eski) borcu olan TUM araclar. Tarih sinirlamasi yoktur.
     /// </summary>
     public async Task<List<ZoneDebtorDto>> GetZoneDebtorsAsync(long companyId, long zoneId)
@@ -136,6 +171,17 @@ public sealed class VehicleParkQueryService
 }
 
 /// <summary>Kara liste satiri: bolgede odenmemis borcu olan arac.</summary>
+/// <summary>
+/// VehiclePark/GetParkOccupancy yaniti. Sunucudaki ParkCapacityModel ile birebir.
+/// </summary>
+public class ParkOccupancyDto
+{
+    public int TotalParkCapacity { get; set; }
+    public int VehicleParkingCount { get; set; }
+    public int EmptyCount { get; set; }
+    public decimal OccupancyRate { get; set; }
+}
+
 public class ZoneDebtorDto
 {
     public long VehicleDefinitionId { get; set; }
