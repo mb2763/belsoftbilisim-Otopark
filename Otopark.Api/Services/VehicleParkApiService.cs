@@ -292,6 +292,67 @@ public partial class VehicleParkApiService
     /// ACIYORDU. Sessiz basarisizlik yerine artik istisna firlatiliyor; cikis
     /// akisi bunu yakalayip cikisi DURDURUR (bkz. GetVehicleDebtsAsync).
     /// </summary>
+    /// <summary>
+    /// KAPALI OTOPARK CIKISI (27.08.2026) - ortak AddExitAsync'ten AYRI uc.
+    ///
+    /// NEDEN AYRI: kapali otoparkta para BARIYERDE DEGIL KIOSKTA alinir; cikis
+    /// yalnizca kayit tutar. Ortak uc "bu cikista para aliniyor" varsayimiyla
+    /// PARK_PAYMENTS satiri acar, PAYTR faturasi keser ve odeme tipi HGS ise
+    /// gercek provizyon dener - ucu de kapali otoparkta MUKERRER olurdu.
+    ///
+    /// Sunucuda uc yoksa (eski surum) ya da ag hatasi olursa NULL doner;
+    /// cagiran taraf eski uca duser ve cikis calismaya devam eder.
+    /// </summary>
+    public async Task<ClosedParkExitCall> AddClosedParkExitAsync(ClosedParkExitRequest req)
+    {
+        try
+        {
+            // JSON SOZLESMESI ACIK YAZILIR (ortuk varsayilana guvenilmez).
+            // Sunucu services.AddControllers() ile calisiyor, yani yanit CAMELCASE
+            // ("success", "calculatedFee"). Istekte de ayni politika kullanilir.
+            // AddExitAsync ile birebir ayni kalip - bu dosyanin yerlesik deseni.
+            using var response = await _http.PostAsJsonAsync(
+                "VehiclePark/AddClosedParkExit", req,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+            // YALNIZCA "UC YOK" DURUMUNDA ESKI YOLA DUSULUR.
+            // 404 = yol tanimsiz (sunucu henuz guncellenmemis), 405 = yontem yok.
+            // Diger her basarisizlikta (500, 502, zaman asimi) cikis satiri
+            // YAZILMIS OLABILIR; eski uca dusmek MUKERRER CIKIS uretirdi.
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+            {
+                return new ClosedParkExitCall { EndpointMissing = true };
+            }
+
+            if (!response.IsSuccessStatusCode)
+                return new ClosedParkExitCall();   // istek basarisiz - eski uca DUSULMEZ
+
+            var json = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(json))
+                return new ClosedParkExitCall();
+
+            var sonuc = JsonSerializer.Deserialize<ClosedParkExitResultDto>(
+                json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            return new ClosedParkExitCall { Result = sonuc };
+        }
+        catch (HttpRequestException hex) when (
+            hex.StatusCode == System.Net.HttpStatusCode.NotFound ||
+            hex.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+        {
+            return new ClosedParkExitCall { EndpointMissing = true };
+        }
+        catch
+        {
+            // AGA HIC ULASILAMADI: sunucu kapali ya da adres yanlis. Bu durumda
+            // cikis satiri YAZILMAMIS demektir (istek gitmedi), bu yuzden eski uca
+            // dusmek guvenlidir - eski uc da ayni sunucuya gidip ayni hatayi alir
+            // ve akis "cikis dogrulanamadi" ile durur.
+            return new ClosedParkExitCall { EndpointMissing = true };
+        }
+    }
+
     public async Task<List<VehicleCreditDto>> GetVehicleCreditsAsync(long vehicleDefinitionId)
     {
         var url = $"VehicleParkCredit/GetVehicleCredits?vehicleDefinitionId={vehicleDefinitionId}";
@@ -582,6 +643,67 @@ public class DeleteEntryResponse
 {
     public List<ErrorMessageObject>? Errors { get; set; }
     public object? Result { get; set; }
+}
+
+/// <summary>KAPALI OTOPARK CIKIS ISTEGI (27.08.2026) - sunucudaki ClosedParkExitModel ile birebir.</summary>
+public class ClosedParkExitRequest
+{
+    public long CompanyId { get; set; }
+    public long VehicleEntryId { get; set; }
+    public long ExitZoneId { get; set; }
+    public long ExitUserId { get; set; }
+    public long CurrentUserId { get; set; }
+    public DateTime? ExitTimeStamp { get; set; }
+    public string? Photo { get; set; }
+
+    /// <summary>
+    /// POLITIKA GEREGI UCRETSIZ CIKIS (yikama fisi, abone vb.).
+    /// Borc ACIK olsa bile cikis "odenmedi" sayilmaz; EXIT_CODE bugune kadarki
+    /// gibi 1 yazilir ve mevcut raporlarin sayilari degismez.
+    /// </summary>
+    public bool UcretsizCikis { get; set; }
+}
+
+/// <summary>KAPALI OTOPARK CIKIS SONUCU. Bariyer YALNIZCA Success = true iken acilir.</summary>
+public class ClosedParkExitResultDto
+{
+    public bool Success { get; set; }
+    public long ExitId { get; set; }
+    public decimal CalculatedFee { get; set; }
+    public short ExitCode { get; set; }
+
+    /// <summary>"ODENDI" | "ABONE" | "MISAFIR" | "UCRETSIZ" | "BORCLU" | "ZATEN_CIKMIS"</summary>
+    public string? Reason { get; set; }
+
+    /// <summary>
+    /// Cikis kaydi ZATEN VAR. Success = false doner ama HATA DEGILDIR -
+    /// bariyer ACILMALIDIR, aksi halde arac icerde kilitli kalir.
+    /// </summary>
+    public bool AlreadyExited { get; set; }
+
+    public string? Message { get; set; }
+}
+
+/// <summary>
+/// KAPALI OTOPARK CIKIS CAGRISININ SONUCU (27.08.2026).
+///
+/// NEDEN AYRI BIR SARMALAYICI: "sunucuda uc YOK" ile "istek BASARISIZ" birbirinden
+/// AYRILMAK ZORUNDA. Ikisi de null donseydi, uc cikis satirini YAZIP yanit yolda
+/// kaybolduğunda (zaman asimi, 502, baglanti kopmasi) istemci ESKI uca duser ve
+/// AYNI GIRISE IKINCI bir VEHICLE_PARK_EXIT + PARK_PAYMENTS satiri acilirdi -
+/// tam da bu tasarimin onlemek istedigi sey.
+/// </summary>
+public sealed class ClosedParkExitCall
+{
+    /// <summary>Uc sunucuda YOK (404/405). Yalnizca bu durumda ESKI uca dusulur.</summary>
+    public bool EndpointMissing { get; set; }
+
+    /// <summary>
+    /// Sunucudan gelen sonuc. EndpointMissing = false iken null ise istek
+    /// BASARISIZ olmustur; cikis yazilmis OLABILIR, bu yuzden ESKI uca
+    /// DUSULMEZ ve bariyer ACILMAZ.
+    /// </summary>
+    public ClosedParkExitResultDto? Result { get; set; }
 }
 
 public class VehicleCreditDto

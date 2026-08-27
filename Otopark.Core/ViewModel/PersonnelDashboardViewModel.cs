@@ -1540,24 +1540,102 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // satirlarinda da GIRIS fotografi gorunuyordu.
             exitReq.Photo = CikisFotografiBase64();
 
-            var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
+            // ===== KAPALI OTOPARK CIKISI AYRI UCA GIDER (27.08.2026) =====
+            //
+            // NEDEN: kapali otoparkta para BARIYERDE DEGIL KIOSKTA tahsil edilir;
+            // bu cikis yalnizca KAYIT tutar. Ortak uc (AddVehicleExit) ise "bu
+            // cikista para aliniyor" varsayimiyla yazilmis ve yazilan ucret 0'dan
+            // buyuk olur olmaz:
+            //   - PARK_PAYMENTS satiri acar     -> Z raporu ayni parayi CIFT SAYAR
+            //     (kiosk tahsilati zaten VEHICLE_CREDIT_PAID'te; kioskun
+            //      PARK_PAYMENTS blogu yorum satiri)
+            //   - PAYTR TYPE_PARK faturasi atar -> gun sonu IKINCI GERCEK FATURA
+            //   - odeme tipi HGS ise provizyon  -> musteriden IKINCI KEZ PARA CEKER
+            //
+            // Bu yuzden ortak servise kosul EKLENMEDI; kapali otopark komple ayri
+            // bir uca alindi ve iki dunya birbirine karismiyor. Yeni uc YALNIZCA
+            // VEHICLE_PARK_EXIT satirini yazar:
+            //   CALCULATED_FEE = PAYABLE_FEE = ziyaret icin GERCEKTEN tahsil edilen
+            //   EXIT_CODE      = o tahsilatin gercek tipi (4 = Kredi Karti, 5 = HGS)
+            // Ucreti ve odeme tipini SUNUCU belirler; istemci tutar gondermez.
+            //
+            // GERIYE DONUK UYUM: uc yoksa (sunucu henuz guncellenmemis) ya da aga
+            // erisilemezse null doner ve ESKI uc calisir. Dagitim sirasi onemli
+            // olmaz, cikis her halukarda yapilir.
+            // Sunucunun yazdigi ucret; yerel hasilat sayaci bunu kullanir (sunucu
+            // KAYNAK OTORITEDIR). null ise eski davranis (CurrentDebt) surer.
+            decimal? sunucuCikisUcreti = null;
 
-            // KRITIK: exitResponse == null durumu ONCEDEN sessizce BASARI sayiliyordu
-            // ('?.' yuzunden kosul false oluyordu) -> cikis kaydedilmemis olsa bile
-            // bariyer aciliyordu. Artik acikca basarisiz kabul edilir.
-            if (exitResponse == null)
+            var kapaliCikis = await _vehicleApi.AddClosedParkExitAsync(new ClosedParkExitRequest
             {
-                ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucudan yanit alinamadi). Bariyer acilmadi.", false);
-                return;
+                CompanyId      = UserSession.CompanyId,
+                VehicleEntryId = entryId,
+                ExitZoneId     = BolgeId,
+                ExitUserId     = UserSession.UserId,
+                CurrentUserId  = UserSession.UserId,
+                ExitTimeStamp  = DateTime.Now,
+                Photo          = exitReq.Photo,
+
+                // Politika geregi ucretsiz cikanlar: abone ve yikama fisli arac.
+                // Borclari acik olsa bile cikis "odenmedi" sayilmaz; EXIT_CODE
+                // bugune kadarki gibi 1 kalir ve mevcut raporlar degismez.
+                UcretsizCikis  = aboneMi || washBypass || ucretsizCikis
+            });
+
+            if (!kapaliCikis.EndpointMissing)
+            {
+                var kc = kapaliCikis.Result;
+
+                // ISTEK BASARISIZ (500 / zaman asimi / bozuk yanit):
+                // cikis satiri YAZILMIS OLABILIR. Eski uca DUSULMEZ - dusulseydi
+                // ayni girise IKINCI cikis kaydi acilirdi. Bariyer de ACILMAZ.
+                if (kc == null)
+                {
+                    ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucu yaniti alinamadi). Bariyer acilmadi.", false);
+                    return;
+                }
+
+                // "ZATEN CIKMIS" HATA DEGILDIR: cikis kaydi mevcut, bariyer acilmali.
+                // Aksi halde arac icerde kilitli kalir (eski uc bu durumda aciyordu).
+                if (!kc.Success && !kc.AlreadyExited)
+                {
+                    ShowToast(
+                        string.IsNullOrWhiteSpace(kc.Message)
+                            ? $"{plate}: Cikis kaydedilemedi. Bariyer acilmadi."
+                            : $"{plate}: {kc.Message}",
+                        false);
+                    return;
+                }
+
+                sunucuCikisUcreti = kc.CalculatedFee;
+
+                if (kc.Reason == "BORCLU")
+                    ShowToast($"{plate}: Cikis kaydedildi ancak bu ziyaretin borcu ACIK kaldi.", true);
+
+                // Basarili -> ortak uc CAGRILMAZ; asagidaki ORTAK tamamlama akisi
+                // (yerel satir isaretleme, sayac, bariyer, toast) aynen calisir.
             }
-
-            if (exitResponse.Errors != null && exitResponse.Errors.Count > 0)
+            else
             {
-                var errorMsg = string.Join(", ", exitResponse.Errors
-                    .Where(e => !string.IsNullOrEmpty(e.Message))
-                    .Select(e => e.Message));
-                ShowToast(string.IsNullOrWhiteSpace(errorMsg) ? "Cikis kaydedilemedi." : errorMsg, false);
-                return;
+                var exitResponse = await _vehicleApi.AddExitAsync(exitReq);
+
+                // KRITIK: exitResponse == null durumu ONCEDEN sessizce BASARI sayiliyordu
+                // ('?.' yuzunden kosul false oluyordu) -> cikis kaydedilmemis olsa bile
+                // bariyer aciliyordu. Artik acikca basarisiz kabul edilir.
+                if (exitResponse == null)
+                {
+                    ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucudan yanit alinamadi). Bariyer acilmadi.", false);
+                    return;
+                }
+
+                if (exitResponse.Errors != null && exitResponse.Errors.Count > 0)
+                {
+                    var errorMsg = string.Join(", ", exitResponse.Errors
+                        .Where(e => !string.IsNullOrEmpty(e.Message))
+                        .Select(e => e.Message));
+                    ShowToast(string.IsNullOrWhiteSpace(errorMsg) ? "Cikis kaydedilemedi." : errorMsg, false);
+                    return;
+                }
             }
 
             // Cikis yapan aracin YEREL satiri isaretlenmezse "Bos/Dolu" sayaci dusmez;
@@ -1576,7 +1654,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 existingRow.ExitDateTime = DateTime.Now;
                 existingRow.ExitPlateImagePath = GetFirstSnapshotPath(isEntry: false);
                 existingRow.ParkType = "Cikis";
-                existingRow.ExitFee = existingRow.CurrentDebt;   // cikis tutarini hasilata yansit (sifirlanmadan once yakala)
+                // HASILAT: sunucu yazdiysa ONUN tutari kullanilir (kaynak otorite).
+                // Kiosktan odenmis aracta CurrentDebt zaten 0'a dusmus oluyor ve
+                // yerel hasilat kutusu 0 gosteriyordu; sunucunun yazdigi tutar gercek.
+                existingRow.ExitFee = sunucuCikisUcreti ?? existingRow.CurrentDebt;
                 existingRow.CurrentDebt = 0;
                 existingRow.TotalDebt = existingRow.OldDebt;
             }
