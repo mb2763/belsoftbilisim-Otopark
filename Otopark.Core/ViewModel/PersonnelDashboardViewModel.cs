@@ -955,8 +955,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
 
         EntryDetectedPlate = plate;
-        // Gorsel yok; pending photo bosaltilir
+
+        // ===== ONCEKI ARACIN FOTOGRAFI DEVRALINMASIN (28.08.2026) =====
+        //
+        // _entryPendingPhotoBase64 bosaltiliyordu ama EntryPlateSnapshotPaths
+        // BOSALTILMIYORDU. O dizi yalnizca KAMERA okumasinda doluyor
+        // (PersonnelDashboardView.xaml.cs) ve hicbir yerde temizlenmiyor.
+        //
+        // Sonuc: manuel "Iceri Al" ile eklenen satir, DoApproveEntryAsync icindeki
+        // GetFirstSnapshotPath(isEntry: true) uzerinden EN SON KAMERAYA OKUNAN
+        // ARACIN fotografini gosteriyordu. Yani ekranda yanlis aracin resmi
+        // goruluyordu - fotografin hic olmamasindan daha kotu.
+        //
+        // Manuel giriste gorsel YOKTUR: ikisi de bosaltilir, satir "Fotograf yok"
+        // yer tutucusuyla cizilir.
         _entryPendingPhotoBase64 = "";
+        EntryPlateSnapshotPaths = Array.Empty<string>();
+
         await DoApproveEntryAsync();
 
         MissedPlateInput = "";
