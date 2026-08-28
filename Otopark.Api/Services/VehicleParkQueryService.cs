@@ -122,6 +122,53 @@ public sealed class VehicleParkQueryService
     }
 
     /// <summary>
+    /// PLAKAYA GORE ACIK GIRIS - TARIHTEN BAGIMSIZ (28.08.2026).
+    ///
+    /// NEDEN GEREKLI: cikis akisindaki iki arama da YALNIZCA BUGUNU tariyordu
+    /// (_allVehicles ve GetByZoneTodayAsync -> sunucuda GetVehicleParkByZoneToday,
+    /// "EntryTimestamp >= today && < tomorrow"). Dun girip bugun cikan ya da manuel
+    /// "Iceri Al" ile alinmis bir arac bulunamiyor, akis hayalet giris uretmeye
+    /// calisiyor ve bariyer acilmadan duruyordu.
+    ///
+    /// Bu uc (VehiclePark/GetVehicleCurrentParkByPlate -> GetCurrentVehicleParkByParkPlate)
+    /// TARIH FILTRESI ICERMEZ; yalnizca "cikisi yapilmamis" (ExitId == null) kaydi arar.
+    /// Kiosk da ayni ucu kullaniyor.
+    ///
+    /// DIKKAT - BOLGE FILTRESI YOK: uc firma genelini dondurur. Cagiran taraf
+    /// KENDI bolgesine gore suzmelidir; aksi halde baska bir otoparkin acik girisi
+    /// uzerine cikis yazilir.
+    ///
+    /// Hata durumunda BOS liste doner (cagiran taraf eski davranisina devam eder).
+    /// </summary>
+    public async Task<List<VewVehicleParkCurrentDto>> GetOpenParkByPlateAsync(
+        long companyId, long currentUserId, string plate)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(plate)) return new();
+
+            using var response = await _http.PostAsJsonAsync(
+                "VehiclePark/GetVehicleCurrentParkByPlate", new
+                {
+                    companyId = companyId,
+                    currentUserId = currentUserId,
+                    plate = plate
+                });
+
+            if (!response.IsSuccessStatusCode) return new();
+
+            var json = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(json)) return new();
+
+            return JsonSerializer.Deserialize<List<VewVehicleParkCurrentDto>>(json, JsonOpts) ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    /// <summary>
     /// PARK DOLULUGU - web panosuyla ORTAK hesap (27.08.2026).
     ///
     /// Sunucudaki ZoneManager.GetParkOccupancy'yi cagirir; kapasite, icerideki arac,

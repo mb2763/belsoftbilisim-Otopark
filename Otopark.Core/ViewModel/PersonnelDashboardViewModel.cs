@@ -639,6 +639,27 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
             if (response.Errors != null && response.Errors.Count > 0)
             {
+                // SUNUCU KAYIT OLUSTURMADI. Once sunu sor: bu plakanin ZATEN acik
+                // bir girisi var mi? (Sunucu "mukerrer giris" gordugunde yeni kayit
+                // uretmiyor ve 28.08.2026'dan itibaren acik hata donuyor.)
+                //
+                // Varsa arac fiziksel olarak kapida bekliyordur; YENI KAYIT
+                // URETMEDEN mevcut girisi kullanip bariyeri acmak dogrudur.
+                // Yoksa gercek bir hatadir: bariyer ACILMAZ.
+                long zatenVarId = await MevcutAcikGirisBulAsync(plate);
+
+                if (zatenVarId > 0)
+                {
+                    ShowToast($"{plate}: Bu arac zaten kayitli (giris #{zatenVarId}). " +
+                              "Yeni kayit olusturulmadi, bariyer aciliyor.", true);
+                    BariyeriHemenAc(plate);
+                    await LoadParkDataAsync();
+
+                    EntryDetectedPlate = "";
+                    _entryPendingPhotoBase64 = "";
+                    return;
+                }
+
                 var errorMsg = string.Join(", ", response.Errors
                     .Where(e => !string.IsNullOrEmpty(e.Message))
                     .Select(e => e.Message));
@@ -647,7 +668,53 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 return;
             }
 
+            // ===== SONUCSUZ YANIT BASARI SAYILMAZ (28.08.2026 - saha vakasi) =====
+            //
+            // Sunucu, ayni plaka icin yakin zamanli bir giris bulunca mukerrer kabul
+            // edip ISLEM YAPMADAN donuyordu. Eski surumlerde bu yanit "Errors = [],
+            // Result = null, HTTP 200" seklindeydi; yani yukaridaki iki kontrol de
+            // gecti ve akis BASARILI gibi devam etti:
+            //   - bariyer acildi,
+            //   - satir listeye EntryId = 0 ile eklendi (arac "iceride" gorundu),
+            //   - `entry?.Id > 0` FALSE oldugu icin BORC YAZILMADI,
+            //   - personele "giris kaydedildi" dendi.
+            // Sonra cikista o giris bulunamiyor, sistem hayalet giris uretmeye
+            // calisiyor ve BARIYER ACILMIYORDU. Sahadaki sikayet tam olarak buydu.
+            //
+            // Sunucu artik acik hata donuyor; yine de eski surum sunuculara karsi
+            // calisabilmek icin burada da koruma var: Result null ise MEVCUT acik
+            // giris plakadan aranir.
+            //   - BULUNURSA  : yeni kayit URETILMEZ, o girisin kimligi kullanilir
+            //                  (arac zaten iceride, bariyer acilmali - fiziksel
+            //                   olarak kapida bekliyor).
+            //   - BULUNAMAZSA: bariyer ACILMAZ, satir eklenmez, personele gercek
+            //                  durum soylenir. Yalan "kaydedildi" mesaji verilmez.
             var entry = response.Result;
+
+            if (entry == null)
+            {
+                long mevcutGirisId = await MevcutAcikGirisBulAsync(plate);
+
+                if (mevcutGirisId <= 0)
+                {
+                    ShowToast($"{plate}: Giris KAYDEDILEMEDI (sunucu kayit olusturmadi). " +
+                              "Bariyer acilmadi, lutfen tekrar deneyin.", false);
+                    EntryDetectedPlate = "";
+                    _entryPendingPhotoBase64 = "";
+                    return;
+                }
+
+                ShowToast($"{plate}: Bu arac zaten kayitli (giris #{mevcutGirisId}). " +
+                          "Yeni kayit olusturulmadi, bariyer aciliyor.", true);
+
+                // Listeyi sunucudan tazele: mevcut giris satiri ekrana gelsin.
+                BariyeriHemenAc(plate);
+                await LoadParkDataAsync();
+
+                EntryDetectedPlate = "";
+                _entryPendingPhotoBase64 = "";
+                return;
+            }
             var vehDef = entry?.VehicleDefinition;
 
             // ===== BARIYER: GIRIS SUNUCUYA DUSER DUSMEZ AC =====
@@ -832,6 +899,42 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         finally
         {
             System.Threading.Interlocked.Decrement(ref _girisKuyrugu);
+        }
+    }
+
+    /// <summary>
+    /// BU PLAKANIN BU BOLGEDE ZATEN ACIK BIR GIRISI VAR MI? (28.08.2026)
+    ///
+    /// Sunucu ayni plaka icin yakin zamanli bir giris bulunca yeni kayit
+    /// OLUSTURMUYOR. Boyle bir durumda arac fiziksel olarak kapida bekliyor
+    /// olabilir; yeni kayit uretmeden MEVCUT girisin kimligini bulup bariyeri
+    /// acmak dogru davranistir.
+    ///
+    /// Sorgu TARIHTEN BAGIMSIZ calisir (ExitId == null), cunku giris dun
+    /// yapilmis olabilir. Bolgeye gore suzulur: baska bir otoparkin acik
+    /// girisi bu bolgenin araci sayilmamalidir.
+    ///
+    /// Bulunamazsa ya da sorgu basarisiz olursa 0 doner.
+    /// </summary>
+    private async Task<long> MevcutAcikGirisBulAsync(string plate)
+    {
+        try
+        {
+            var acikGirisler = await _parkQuery.GetOpenParkByPlateAsync(
+                UserSession.CompanyId, UserSession.UserId, plate);
+
+            var buBolge = acikGirisler
+                .Where(p => p.EntryZoneId == BolgeId
+                            && p.ExitTimestamp == null
+                            && PlakaAyniMi(p.Plate ?? "", plate))
+                .OrderByDescending(p => p.EntryId)
+                .FirstOrDefault();
+
+            return buBolge?.EntryId ?? 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 
@@ -1199,6 +1302,23 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 }
                 catch { }
             }
+
+            // ===== UCUNCU ARAMA: TARIHTEN BAGIMSIZ (28.08.2026 - saha vakasi) =====
+            //
+            // Yukaridaki IKI arama da YALNIZCA BUGUNU tariyor:
+            //   1) _allVehicles          -> LoadParkDataAsync ile GetByZoneTodayAsync'ten dolar
+            //   2) GetByZoneTodayAsync   -> sunucuda "EntryTimestamp >= today && < tomorrow"
+            //
+            // Bu yuzden DUN girip BUGUN cikan arac (gece kalanlar) ve gun donumu
+            // civarindaki kayitlar bulunamiyordu. Bulunamayinca akis 15 dk oncesine
+            // HAYALET GIRIS + YENI BORC uretmeye calisiyor; vatandas ESKI borcunu
+            // odemis olsa bile bu yeni borc acik oldugu icin bariyer ACILMIYORDU.
+            //
+            // GetOpenParkByPlateAsync tarih filtresi ICERMEZ (ExitId == null ile
+            // "hala iceride" olan kaydi bulur). Kiosk da ayni ucu kullaniyor.
+            // Bolgeye gore suzuluyor: baska bir otoparkin acik girisi ALINMAZ.
+            if (entryId == 0)
+                entryId = await MevcutAcikGirisBulAsync(plate);
 
             // 3-ONCESI: BU ARAC AZ ONCE ZATEN CIKIS YAPMIS MI? (21.08.2026)
             //
