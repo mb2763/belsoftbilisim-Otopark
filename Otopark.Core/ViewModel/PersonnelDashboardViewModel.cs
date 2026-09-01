@@ -186,6 +186,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         // Sure timer - her saniye guncelle
         StartDurationTimer();
+        StartBarrierCommandPoll();   // madde 3: web'den gelen bariyer komutlari
     }
 
     private async void StartDurationTimer()
@@ -195,6 +196,60 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             await Task.Delay(1000);
             foreach (var v in _allVehicles)
                 v.UpdateDuration();
+        }
+    }
+
+    /// <summary>
+    /// UZAKTAN BARIYER KOMUTU YOKLAMASI (01.09.2026 - madde 3).
+    ///
+    /// Web'deki Plaka Revizyonu ekranindan bariyer acilmak istendiginde komut
+    /// sunucuda bir kuyruga birakilir; BU DONGU onu alip kendi agindan uygular.
+    ///
+    /// NEDEN BOYLE: bariyer, kameranin yerel agdaki IO cikisindan tetikleniyor
+    /// (PUT http://{kamera-IP}/ISAPI/System/IO/outputs/..). Web sunucusu farkli
+    /// agda oldugu icin o adrese ULASAMAZ. Komutu otoparktaki bu istemci uygular.
+    ///
+    /// YUK: ucun kendisi TAMAMEN BELLEKTEN okunuyor, veritabanina hic gitmiyor.
+    /// Bu yuzden 3 saniyelik yoklama sunucuya anlamli bir maliyet getirmez.
+    /// (Mobildeki 3 sn'lik yoklama sorun cikarmisti; oradaki uc her cagrida
+    /// arac basina tarife sorgusu yapiyordu, buradaki ise sadece kuyruk okur.)
+    ///
+    /// GUVENLIK: komutun omru sunucuda 60 sn. Gec alinan komut uygulanmaz;
+    /// saatler sonra kendiliginden acilan bariyer olmaz.
+    /// </summary>
+    private async void StartBarrierCommandPoll()
+    {
+        while (true)
+        {
+            await Task.Delay(3000);
+
+            try
+            {
+                if (BolgeId == 0 || UserSession.CompanyId == 0) continue;
+
+                var komutlar = await _parkQuery.GetPendingBarrierCommandsAsync(UserSession.CompanyId, BolgeId);
+                if (komutlar == null || komutlar.Count == 0) continue;
+
+                foreach (var k in komutlar)
+                {
+                    bool girisMi = string.Equals(k.Gate, "giris", StringComparison.OrdinalIgnoreCase);
+
+                    // Bariyer komutu, ekrandan elle basilmis gibi calisir:
+                    // bekleme uygulanmaz (personel bilerek talep etti).
+                    if (girisMi && OnOpenEntryGateRequested != null)
+                        await OnOpenEntryGateRequested.Invoke(k.Plate);
+                    else if (!girisMi && OnOpenExitGateRequested != null)
+                        await OnOpenExitGateRequested.Invoke(k.Plate);
+
+                    ShowToast($"Web'den {(girisMi ? "giris" : "cikis")} bariyeri acma talebi uygulandi" +
+                              (string.IsNullOrWhiteSpace(k.Plate) ? "." : $" ({k.Plate})."), true);
+                }
+            }
+            catch
+            {
+                // Yoklama basarisizsa SESSIZ gecilir: bariyer acilmaz, baska
+                // hicbir yan etki olmaz. Bir sonraki turda tekrar denenir.
+            }
         }
     }
 
@@ -455,6 +510,33 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     ///
     /// Sorgu basarisiz olursa (-1) yerel hesap OLDUGU GIBI birakilir; sayac sifirlanmaz.
     /// </summary>
+    /// <summary>
+    /// BARIYER ACILDI ama CIKIS KAYDI OLUSMADI vakasini diske yazar (01.09.2026).
+    ///
+    /// Madde 4-b geregi bariyer artik sunucu onayini BEKLEMEDEN aciliyor.
+    /// Bunun bedeli, sunucu yazamadiginda aracin cikmis ama kaydinin olusmamis
+    /// olmasi. Ekrandaki uyari personel "Tamam"a basinca kaybolur; vaka geriye
+    /// donuk bulunabilsin diye ayrica dosyaya yazilir.
+    ///
+    /// Dosya: %LOCALAPPDATA%\Otopark\cikis_kurtarma.txt
+    /// Yazma HICBIR sekilde akisi bozmaz (try/catch): kurtarma notu kozmetiktir,
+    /// asil islemi dusuremez.
+    /// </summary>
+    private static void CikisKurtarmaNotu(string plate, long entryId, string? sebep)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Otopark");
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(dir, "cikis_kurtarma.txt"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] BARIYER ACILDI, CIKIS KAYDI YOK | " +
+                $"plaka={plate} entryId={entryId} sebep={sebep ?? "-"}" + Environment.NewLine);
+        }
+        catch { /* not yazilamadi - islem etkilenmez */ }
+    }
+
     public async Task RefreshOccupancyAsync()
     {
         if (BolgeId == 0) return;
@@ -1646,6 +1728,35 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 ShowToast($"{plate}: Yıkama fişi geçerli, çıkış serbest. Otopark borcu ({zoneDebt:F2} TL) açık kalmaya devam ediyor.", true);
             }
 
+            // ================= BARIYER BURADA ACILIR (01.09.2026 - madde 4) =================
+            //
+            // SAHA SIKAYETI: "Cikis bariyer tetigi gec gidiyor, okuduktan sonra
+            // acilma suresi 5 saniye."
+            //
+            // SEBEBI: bariyer, sunucudaki cikis kaydi ONAYLANDIKTAN sonra
+            // aciliyordu. Gecikme bariyer komutunda degil, o sunucu gidis
+            // donusunde (AddExitAsync ~5 sn).
+            //
+            // ARTIK: arac cikisa YETKILI hale gelir gelmez bariyer acilir.
+            // Yetki bu satira gelinmesiyle zaten kanitlanmistir - yukarida
+            // borc kapisi var ve borclu arac "return" ile geri donuyor
+            // (abone / ucretsiz / yikama istisnalari da orada karara baglaniyor).
+            // Cikis kaydi bundan SONRA yazilir.
+            //
+            // >>> BILINEREK ALINAN RISK <<<
+            // 28.08.2026'da tam tersi yapilmisti: kayit dogrulanmadan bariyer
+            // acilmasin diye. O koruma bilerek KALDIRILIYOR (kullanici karari,
+            // secenek "b"). Bedeli: sunucu yazmayi beceremezse arac cikmis ama
+            // kaydi olusmamis olur. Bu yuzden asagida kayit basarisiz olursa
+            // SESSIZ GECILMEZ: personele kirmizi uyari cikar ve kurtarma notu
+            // yazilir; boylece vaka kaybolmaz, elle duzeltilebilir.
+            bool bariyerAcildi = false;
+            if (OnOpenExitGateRequested != null)
+            {
+                await OnOpenExitGateRequested.Invoke(plate);
+                bariyerAcildi = true;
+            }
+
             // 7. Cikis API
             var exitReq = new VehicleParkExitRequest
             {
@@ -1726,7 +1837,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 // ayni girise IKINCI cikis kaydi acilirdi. Bariyer de ACILMAZ.
                 if (kc == null)
                 {
-                    ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucu yaniti alinamadi). Bariyer acilmadi.", false);
+                    // BARIYER ZATEN ACILDI (madde 4-b). Vaka kaybolmasin diye
+                    // hem personele hem kurtarma notuna yazilir.
+                    ShowToast($"{plate}: BARIYER ACILDI ama CIKIS KAYDI OLUSMADI (sunucu yaniti yok). Kaydi elle tamamlayin!", false);
+                    CikisKurtarmaNotu(plate, entryId, "sunucu yaniti alinamadi (kapali otopark ucu)");
                     return;
                 }
 
@@ -1759,7 +1873,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 // bariyer aciliyordu. Artik acikca basarisiz kabul edilir.
                 if (exitResponse == null)
                 {
-                    ShowToast($"{plate}: Cikis DOGRULANAMADI (sunucudan yanit alinamadi). Bariyer acilmadi.", false);
+                    // BARIYER ZATEN ACILDI (madde 4-b).
+                    ShowToast($"{plate}: BARIYER ACILDI ama CIKIS KAYDI OLUSMADI (sunucudan yanit yok). Kaydi elle tamamlayin!", false);
+                    CikisKurtarmaNotu(plate, entryId, "sunucudan yanit alinamadi");
                     return;
                 }
 
@@ -1768,7 +1884,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                     var errorMsg = string.Join(", ", exitResponse.Errors
                         .Where(e => !string.IsNullOrEmpty(e.Message))
                         .Select(e => e.Message));
-                    ShowToast(string.IsNullOrWhiteSpace(errorMsg) ? "Cikis kaydedilemedi." : errorMsg, false);
+                    ShowToast($"{plate}: BARIYER ACILDI ama cikis kaydedilemedi — " +
+                              (string.IsNullOrWhiteSpace(errorMsg) ? "sunucu hatasi." : errorMsg), false);
+                    CikisKurtarmaNotu(plate, entryId, errorMsg);
                     return;
                 }
             }
@@ -1800,10 +1918,32 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             UpdateParkCounts();
             ApplyFiltersInternal();
 
-            if (OnOpenExitGateRequested != null)
-                await OnOpenExitGateRequested.Invoke(plate);
+            // NOT: Bariyer YUKARIDA, borc kontrolunun hemen ardindan acildi
+            // (madde 4-b). Burada TEKRAR cagrilmaz - cikis bariyerinde bekleme
+            // uygulanmadigi icin (beklemeyiAtla: true) ikinci komut roleyi bir
+            // kez daha tetikler ve bariyer kapanip yeniden acilirdi.
 
-            string toast = $"{plate} cikis kaydedildi. Bariyer aciliyor...";
+            // DOLULUK SUNUCUDAN TAZELENIR (01.09.2026 - saha: "exe ve web farkli
+            // kapasite gosteriyor").
+            //
+            // UpdateParkCounts icerideki araci YEREL listeden (_allVehicles) sayar;
+            // o liste ekranin gosterdigi kumedir ve DUNDEN KALAN araclari icermez.
+            // RefreshOccupancyAsync ise web panosuyla AYNI ucu kullanir
+            // (ZoneManager.GetParkOccupancy) ve tum acik girisleri sayar.
+            //
+            // Giris, iptal ve toplu cikis akislarinda ikisi zaten pes pese
+            // cagriliyordu; TEK EKSIK burasiydi. Cikistan sonra yerel sayi
+            // sunucununkinin uzerine yaziliyor ve iki ekran farkli rakam
+            // gosteriyordu.
+            //
+            // BARIYERDEN SONRA cagriliyor - bilerek. Oncesine konursa cikis
+            // aninda bir sunucu gidis-donusu daha eklenir ve bariyerin acilmasi
+            // gecikir; bariyer suresi zaten ayri bir sikayet konusu.
+            await RefreshOccupancyAsync();
+
+            string toast = bariyerAcildi
+                ? $"{plate} cikis kaydedildi, bariyer acildi."
+                : $"{plate} cikis kaydedildi.";
             if (totalDebt > 0) toast += $" (Diger bolgelerde toplam borc: {totalDebt:F2} TL)";
             ShowToast(toast, true);
             ExitDetectedPlate = "";

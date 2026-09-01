@@ -1,4 +1,8 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.DependencyInjection;
+
+using System.Windows.Controls;
+
+using Microsoft.Extensions.Configuration;
 using Otopark.Client.Helpers;
 using Otopark.Core;
 using System;
@@ -1144,6 +1148,207 @@ namespace Otopark.Client.Views
         }
 
         // Yikama ekranini ayri pencerede ac (VehicleParkApiService VM'den alinir).
+        /// <summary>
+        /// GUN SONU Z RAPORU (01.09.2026 - madde 1).
+        ///
+        /// AKIS: once ONIZLEME alinir ve ekranda gosterilir; personel onaylarsa
+        /// rapor ALINIR ve veritabanina YAZILIR.
+        ///
+        /// Iki asamali olmasinin sebebi: Z raporu alindiginda sunucuda makbuz
+        /// numarasi uretilip kayit olusuyor, yani GERI ALINAMAZ bir islem.
+        /// Personelin once ne kaydedecegini gormesi gerekiyor.
+        ///
+        /// UCLAR KARISTIRILMAMALI:
+        ///   GetZReportReview -> yalnizca onizleme, hicbir sey yazmaz
+        ///   GetZReport       -> Z_REPORT tablosuna KAYDEDER
+        /// Mobilde bu ikisi karistirilmisti; rapor "alinmis" gorunuyor ama
+        /// veritabaninda olusmuyordu.
+        /// </summary>
+        private async void ZRaporu_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+
+            try
+            {
+                if (btn != null) { btn.IsEnabled = false; btn.Content = "Alınıyor…"; }
+
+                var saglayici = App.Services;
+                if (saglayici == null)
+                {
+                    MessageBox.Show("Servis sağlayıcı hazır değil.", "Gün Sonu Z Raporu",
+                                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                var servis = saglayici.GetRequiredService<Otopark.Api.Services.ZReportApiService>();
+                long personelId = Otopark.Core.Session.UserSession.UserId;
+                long firmaId = Otopark.Core.Session.UserSession.CompanyId;
+
+                // 1) ONIZLEME
+                var onizleme = await servis.GetReviewAsync(personelId, firmaId);
+                if (!onizleme.Basarili || onizleme.Rapor == null)
+                {
+                    MessageBox.Show(onizleme.Mesaj ?? "Önizleme alınamadı.",
+                                    "Gün Sonu Z Raporu", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                var ozet = ZRaporuMetni(onizleme.Rapor);
+
+                // GERIYE DONUK RAPOR (01.09.2026). Varsayilan BUGUN.
+                //
+                // GUNDE TEK RAPOR kurali SUNUCUDA:
+                //   BUGUN  -> rapor varsa GUNCELLENIR (23:59'a kadar; gun icinde
+                //             tahsilat surdugu icin rakamlar degisir)
+                //   GECMIS -> rapor varsa DEGISTIRILMEZ, o gun kapanmistir
+                var raporTarihi = DateTime.Now.Date;
+
+                var tarihCevabi = MessageBox.Show(ozet + Environment.NewLine + Environment.NewLine +
+                    "Z raporu hangi gün için alınsın?" + Environment.NewLine + Environment.NewLine +
+                    "Evet   → bugün (" + raporTarihi.ToString("dd.MM.yyyy") + ")" + Environment.NewLine +
+                    "Hayır  → geriye dönük bir gün seçeceğim" + Environment.NewLine +
+                    "İptal  → vazgeç",
+                    "Gün Sonu Z Raporu — Önizleme",
+                    MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+
+                if (tarihCevabi == MessageBoxResult.Cancel) return;
+
+                if (tarihCevabi == MessageBoxResult.No)
+                {
+                    var girilen = TarihSor(DateTime.Now.AddDays(-1));
+                    if (girilen == null) return;
+                    raporTarihi = girilen.Value;
+
+                    if (raporTarihi > DateTime.Now.Date)
+                    {
+                        MessageBox.Show("İleri tarihe Z raporu alınamaz.",
+                                        "Gün Sonu Z Raporu", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                }
+
+                bool bugunMu = raporTarihi == DateTime.Now.Date;
+
+                var onay = MessageBox.Show(
+                    raporTarihi.ToString("dd.MM.yyyy") + " tarihi için Z raporu alınsın mı?" + Environment.NewLine +
+                    (bugunMu
+                        ? "(Bugüne ait rapor varsa GÜNCELLENİR; gün içinde tekrar alabilirsiniz.)"
+                        : "(Geçmiş güne ait rapor VARSA değiştirilemez.)"),
+                    "Gün Sonu Z Raporu — Onay",
+                    MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (onay != MessageBoxResult.Yes) return;
+
+                // 2) AL ve KAYDET (sunucu gerekirse GUNCELLER)
+                var sonuc = await servis.AlVeKaydetAsync(personelId, firmaId, raporTarihi);
+                if (!sonuc.Basarili || sonuc.Rapor == null)
+                {
+                    MessageBox.Show(sonuc.Mesaj ?? "Z raporu alınamadı.",
+                        "Gün Sonu Z Raporu", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                MessageBox.Show(ZRaporuMetni(sonuc.Rapor) + Environment.NewLine + Environment.NewLine +
+                    raporTarihi.ToString("dd.MM.yyyy") + " tarihli Z raporu kaydedildi.",
+                    "Gün Sonu Z Raporu", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Z raporu sırasında hata: " + ex.Message,
+                                "Gün Sonu Z Raporu", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                if (btn != null) { btn.IsEnabled = true; btn.Content = "Gün Sonu Z"; }
+            }
+        }
+
+        /// <summary>
+        /// Basit tarih sorma penceresi (gg.aa.yyyy).
+        /// Microsoft.VisualBasic.Interaction.InputBox KULLANILMADI: bir metin
+        /// kutusu icin WPF projesine ek bagimlilik eklemek dogru degil.
+        /// Iptal edilirse null doner.
+        /// </summary>
+        private static DateTime? TarihSor(DateTime varsayilan)
+        {
+            var pencere = new Window
+            {
+                Title = "Geriye Dönük Z Raporu",
+                Width = 320, Height = 180,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow
+            };
+
+            var duzen = new StackPanel { Margin = new Thickness(14) };
+            duzen.Children.Add(new TextBlock { Text = "Rapor tarihi (gg.aa.yyyy):", Margin = new Thickness(0, 0, 0, 8) });
+
+            var kutu = new TextBox { Text = varsayilan.ToString("dd.MM.yyyy"), FontSize = 16, Padding = new Thickness(6) };
+            duzen.Children.Add(kutu);
+
+            var dugmeler = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 12, 0, 0)
+            };
+
+            DateTime? secilen = null;
+            var tamam = new Button { Content = "Tamam", Width = 80, Height = 28, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+            var iptal = new Button { Content = "İptal", Width = 80, Height = 28, IsCancel = true };
+
+            tamam.Click += (_, __) =>
+            {
+                if (DateTime.TryParseExact(kutu.Text.Trim(), "dd.MM.yyyy",
+                        System.Globalization.CultureInfo.GetCultureInfo("tr-TR"),
+                        System.Globalization.DateTimeStyles.None, out var t))
+                {
+                    secilen = t.Date;
+                    pencere.Close();
+                }
+                else
+                {
+                    MessageBox.Show("Tarih anlaşılamadı. Örnek: 31.08.2026",
+                                    "Geriye Dönük Z Raporu", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            };
+            iptal.Click += (_, __) => pencere.Close();
+
+            dugmeler.Children.Add(tamam);
+            dugmeler.Children.Add(iptal);
+            duzen.Children.Add(dugmeler);
+
+            pencere.Content = duzen;
+            pencere.ShowDialog();
+            return secilen;
+        }
+
+        /// <summary>Z raporunu okunabilir metne cevirir (onizleme ve sonuc ekrani icin).</summary>
+        private static string ZRaporuMetni(Otopark.Api.Services.ZReportDto r)
+        {
+            string Satir(string ad, decimal? deger) => $"{ad,-28}: {(deger ?? 0m):N2}";
+            string Adet(string ad, decimal? deger) => $"{ad,-28}: {(int)(deger ?? 0m)}";
+
+            return string.Join(Environment.NewLine, new[]
+            {
+                $"Personel: {r.NameSurname}",
+                "",
+                Adet("Park eden araç", r.ParkedVehicleCount),
+                Adet("Ücretsiz çıkan", r.NoPayVehicleCount),
+                Adet("Abone araç", r.SubscriptionVehicleCount),
+                "",
+                Satir("Nakit tahsilat", r.CashPayment),
+                Satir("Kredi kartı tahsilat", r.CreditCardPayment),
+                Satir("HGS tahsilat", r.HgsPayment),
+                Satir("Kiosk tahsilat", r.KioskPayment),
+                Satir("Borç tahsilatı", r.DebitCollection),
+                "",
+                Satir("Abonelik satışı", r.SubscriptionSales),
+                Satir("Abonelik (kredi)", r.SubscriptionCreditSales),
+                Satir("Ön ödemeli satış", r.PrepaidSales),
+                Satir("Bakiye yükleme", r.LoadCreditBalance),
+            });
+        }
+
         private void Wash_Click(object sender, RoutedEventArgs e)
         {
             try

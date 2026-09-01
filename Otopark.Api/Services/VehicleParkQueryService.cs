@@ -177,6 +177,34 @@ public sealed class VehicleParkQueryService
     ///
     /// zoneId = 0 -> firma geneli.
     /// </summary>
+    /// <summary>
+    /// UZAKTAN BARIYER KOMUTLARI (01.09.2026 - madde 3).
+    ///
+    /// Web'den birakilan "bariyer ac" komutlarini alir. Bariyer, kameranin
+    /// yerel agdaki IO cikisindan tetikleniyor; web sunucusu o aga erisemedigi
+    /// icin komutu BU ISTEMCI uygular.
+    ///
+    /// Alinan komut sunucuda kuyruktan DUSER, ikinci kez gelmez.
+    /// Hata halinde BOS liste doner: bariyer acilmaz, hicbir yan etki olmaz.
+    /// </summary>
+    public async Task<List<BarrierCommandDto>> GetPendingBarrierCommandsAsync(long companyId, long zoneId)
+    {
+        try
+        {
+            using var response = await _http.GetAsync(
+                $"VehiclePark/PendingBarrierCommands?companyId={companyId}&zoneId={zoneId}");
+
+            if (!response.IsSuccessStatusCode) return new();
+
+            var zarf = await response.Content.ReadFromJsonAsync<BarrierCommandEnvelope>(JsonOpts);
+            return zarf?.Data ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
     public async Task<ParkOccupancyDto?> GetParkOccupancyAsync(long companyId, long zoneId)
     {
         try
@@ -221,6 +249,27 @@ public sealed class VehicleParkQueryService
 /// <summary>
 /// VehiclePark/GetParkOccupancy yaniti. Sunucudaki ParkCapacityModel ile birebir.
 /// </summary>
+/// <summary>Uzaktan bariyer komutu (madde 3 - web'den birakilir, exe uygular).</summary>
+public class BarrierCommandDto
+{
+    public long Id { get; set; }
+    public long CompanyId { get; set; }
+    public long ZoneId { get; set; }
+    /// <summary>"giris" | "cikis"</summary>
+    public string Gate { get; set; } = "cikis";
+    public string Plate { get; set; } = "";
+    public long RequestUserId { get; set; }
+    public DateTime CreateDate { get; set; }
+}
+
+/// <summary>PendingBarrierCommands zarfi.</summary>
+public class BarrierCommandEnvelope
+{
+    public int Code { get; set; }
+    public string? Message { get; set; }
+    public List<BarrierCommandDto>? Data { get; set; }
+}
+
 public class ParkOccupancyDto
 {
     public int TotalParkCapacity { get; set; }

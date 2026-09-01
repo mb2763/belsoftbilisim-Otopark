@@ -85,6 +85,14 @@
                             VerticalAlignment="Center"
                             Click="Wash_Click"/>
 
+                    <!-- Madde 1: gün sonu Z raporu. Önce ÖNİZLEME gösterilir,
+                         personel onaylarsa rapor ALINIR ve veritabanına yazılır. -->
+                    <Button x:Name="BtnZRaporu" Content="Gün Sonu Z"
+                            MinWidth="90" Height="36" Margin="3" FontSize="11"
+                            Background="#0F766E" Foreground="White" BorderBrush="#0B5D57"
+                            VerticalAlignment="Center"
+                            Click="ZRaporu_Click"/>
+
                     <!-- Kamera + Bariyer Paneli -->
                     <Border MinWidth="245" Height="60" Margin="3"
                             Background="White" CornerRadius="10" Padding="4"

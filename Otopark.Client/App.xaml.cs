@@ -23,6 +23,16 @@ public partial class App : Application
 
     private IHost? _host;
 
+    /// <summary>
+    /// Servis saglayiciya STATIK erisim (01.09.2026 - madde 1).
+    ///
+    /// Servisler normalde kurucudan enjekte ediliyor; ancak XAML'den baglanan
+    /// Click isleyicileri (code-behind) kurucu enjeksiyonu kullanamiyor.
+    /// Bu ozellik yalnizca oradan servise ulasmak icin var.
+    /// _host kurulmadan cagrilirsa null doner - cagiran taraf kontrol etmeli.
+    /// </summary>
+    public static IServiceProvider? Services => (Current as App)?._host?.Services;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // ===== CLI TEST MODU =====
@@ -109,6 +119,8 @@ public partial class App : Application
                 // API Services
                 services.AddSingleton<AuthApiService>();
                 services.AddSingleton<ZoneApiService>();
+                // Madde 1: gun sonu Z raporu (mobildeki akisin exe karsiligi).
+                services.AddSingleton<ZReportApiService>();
 
                 // Main Navigation VM
                 services.AddSingleton<MainViewModel>();
