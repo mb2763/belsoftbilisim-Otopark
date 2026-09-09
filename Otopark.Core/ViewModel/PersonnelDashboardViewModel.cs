@@ -1506,6 +1506,37 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 }
             }
 
+            // ===== ABONELIK KONTROLU ARTIK BURADA (09.09.2026) =====
+            //
+            // SAHA VAKASI: "girerken abone aracini kamera okumadi, biz de goremedik;
+            // cikarken kapiyi acmiyor, araci bekletiyor."
+            //
+            // Abonelik sorgusu ONCEDEN 4b adimindaydi - yani asagidaki "girisi yok"
+            // dalinin KOSULSUZ return'unden SONRA. Sonuc: girisi kacirilmis bir ABONE
+            // aracin abone olup olmadigi HIC SORULMADAN borc yaziliyor ve bariyer
+            // acilmiyordu; arac kapida kaliyordu. Ekranda "A" rozetiyle abone gorunen
+            // arac, yalnizca girisi okunmadigi icin ucretlendiriliyordu.
+            //
+            // Sorgu yukari alindi; kural DEGISMEDI: BolgeId gonderilir, sunucu kapali
+            // otoparkta yalnizca O BOLGEYE ait aboneligi gecerli sayar. Baska bir
+            // otoparkin ya da yol kenarinin abonesi burada abone DEGILDIR.
+            bool aboneMi = false;
+            try
+            {
+                var cikisAbone = await _vehicleApi.CheckSubscriptionAsync(
+                    plate, UserSession.CompanyId, BolgeId);
+                aboneMi = cikisAbone != null && cikisAbone.IsSubscriber;
+                if (aboneMi)
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[CIKIS] {plate}: ABONE ({cikisAbone?.SubscriptionName}) - ucretsiz cikis.");
+            }
+            catch (Exception exAbone)
+            {
+                // Abonelik ogrenilemezse abone SAYILMAZ (fail-closed).
+                System.Diagnostics.Debug.WriteLine(
+                    $"[CIKIS] {plate}: abonelik sorgusu basarisiz ({exAbone.Message}).");
+            }
+
             // 3. Giris yoksa OTOMATIK GIRIS olustur (15 dk oncesine).
             if (entryId == 0)
             {
@@ -1519,6 +1550,17 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 // "0" gonderiyordu (sunucu ucreti KENDI hesaplamiyor) -> arac BEDAVA cikiyordu.
                 // Artik ucret hesaplanip VEHICLE_CREDIT yaziliyor ve cikis DURDURULUYOR;
                 // surucu kiosktan odeyip tekrar geldiginde borc kapali olacagi icin cikabilir.
+                // ABONE ARAC: giris kaydi olusturuldu, BORC YAZILMAZ ve akis
+                // DURDURULMAZ - asagidaki normal yoldan bariyer acilir ve cikis
+                // kaydi yazilir. Aboneden ucret alinmasi zaten yanlisti; burada
+                // ayrica arac kapida bekletiliyordu.
+                if (aboneMi)
+                {
+                    ShowToast(
+                        $"{plate}: Park girisi bulunamadi, kayit olusturuldu. " +
+                        $"Abonelik gecerli - ucret yansitilmadi, cikis yapiliyor.", true);
+                }
+                else
                 try
                 {
                     decimal ucret = (decimal)await _vehicleApi.GetParkPriceAsync(entryId);
@@ -1534,6 +1576,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                             Description = $"Park girisi bulunmayan arac - cikista olusturuldu ({LoggedZoneName})",
                             CompanyId = UserSession.CompanyId,
                             ZoneId = BolgeId,
+                            // BORC GIRISE BAGLANIR (09.09.2026): bagsiz borc yuzunden
+                            // kapali otopark cikisi ucreti "UCRETSIZ" sayabiliyor ve
+                            // gunluk tahakkuk ayni gunu ikinci kez yazabiliyordu.
+                            VehicleEntryId = entryId,
                             VehicleExitId = 0
                         });
 
@@ -1583,31 +1629,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             decimal zoneDebt = creditInfo.zoneDebt;
             decimal totalDebt = creditInfo.totalDebt;
 
-            // 4b. ABONELIK KONTROLU — BU BOLGEYE AIT MI? (18.08.2026)
-            //
-            // Cikis akisinda abonelik hic sorgulanmiyordu; abone yalnizca "borcu
-            // olmadigi icin" geciyordu. Artik acikca sorulur ve BolgeId gonderilir:
-            // sunucu, kapali otoparkta yalnizca O BOLGEYE ait aboneligi gecerli
-            // sayar. Baska bir otoparkin ya da yol kenarinin abonesi burada abone
-            // DEGILDIR; normal ucret/borc akisina duser.
-            bool aboneMi = false;
-            try
-            {
-                var cikisAbone = await _vehicleApi.CheckSubscriptionAsync(
-                    plate, UserSession.CompanyId, BolgeId);
-                aboneMi = cikisAbone != null && cikisAbone.IsSubscriber;
-                if (aboneMi)
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[CIKIS] {plate}: ABONE ({cikisAbone?.SubscriptionName}) - ucretsiz cikis.");
-            }
-            catch (Exception exAbone)
-            {
-                // Abonelik ogrenilemezse abone SAYILMAZ. Gecerli bir abonenin
-                // zaten borcu olmadigi icin asagidaki borc engeline takilmaz;
-                // yani bu varsayim aboneyi magdur etmez.
-                System.Diagnostics.Debug.WriteLine(
-                    $"[CIKIS] {plate}: abonelik sorgusu basarisiz ({exAbone.Message}).");
-            }
+            // 4b. ABONELIK: yukarida (adim 3'ten ONCE) sorgulandi, burada YALNIZCA
+            // KULLANILIR. Sorgu yukari tasindi cunku "girisi yok" dali abonelik
+            // sorulmadan borc yazip akisi durduruyordu ve abone arac kapida kaliyordu.
 
             // 5. Gunluk ucret hesabi: gece 23:59'i geçtiyse her gun icin gunluk ucret eklenir.
             var entryRow = _allVehicles.FirstOrDefault(v => v.EntryId == entryId);
