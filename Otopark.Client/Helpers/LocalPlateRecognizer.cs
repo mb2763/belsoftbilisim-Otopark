@@ -98,6 +98,7 @@ namespace Otopark.Client.Helpers
                 _initError = true;
                 AppLog($"Lokal motor DEVRE DISI: bolge bulucu={bolgeBulucuVar} okuyucu={okuyucuVar}. " +
                        $"C:\\Otopark\\models icindeki plate_detector.onnx / plate_ocr.onnx dosyalarini kontrol edin.");
+                OrtamTanisiYaz();
             }
 
             AppLog($"Lokal motor: ONNX-detector={_onnxDetector.IsAvailable} ONNX-OCR={_onnxOcr.IsAvailable} " +
@@ -109,6 +110,42 @@ namespace Otopark.Client.Helpers
         {
             try { using var m = new Mat(1, 1, MatType.CV_8UC1); return !m.Empty(); }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// MOTOR YUKLENEMEDIGINDE ORTAMI YAZAR (17.09.2026 - HUNAT saha vakasi).
+        ///
+        /// Sahada ONNX ve Tesseract AYNI ANDA yuklenemedi ("type initializer ... threw an
+        /// exception"); log hangi parcanin eksik oldugunu soylemiyordu ve ayni exe baska
+        /// bilgisayarda calisiyordu. Iki motorun ORTAK bagimliligi Visual C++ Runtime'dir
+        /// (onnxruntime.dll ve tesseract50.dll onu kullanir). Bu metot, bir daha olursa
+        /// cevabin DOGRUDAN logda gorunmesi icin dosyalarin varligini yazar.
+        /// </summary>
+        private static void OrtamTanisiYaz()
+        {
+            try
+            {
+                string kok = AppDomain.CurrentDomain.BaseDirectory;
+                string sistem = Environment.GetFolderPath(Environment.SpecialFolder.System);
+
+                static string Durum(string yol)
+                {
+                    try { return File.Exists(yol) ? $"VAR ({new FileInfo(yol).Length / 1024} KB)" : "YOK"; }
+                    catch { return "OKUNAMADI"; }
+                }
+
+                AppLog("ORTAM TANISI (plaka motoru yuklenemedi):");
+                AppLog($"   uygulama klasoru   : {kok}");
+                AppLog($"   onnxruntime.dll    : {Durum(Path.Combine(kok, "onnxruntime.dll"))}");
+                AppLog($"   OpenCvSharpExtern  : {Durum(Path.Combine(kok, "OpenCvSharpExtern.dll"))}");
+                AppLog($"   x64/tesseract50    : {Durum(Path.Combine(kok, "x64", "tesseract50.dll"))}");
+                AppLog($"   x64/leptonica      : {Durum(Path.Combine(kok, "x64", "leptonica-1.82.0.dll"))}");
+                AppLog($"   VCRUNTIME140.dll   : {Durum(Path.Combine(sistem, "vcruntime140.dll"))}");
+                AppLog($"   VCRUNTIME140_1.dll : {Durum(Path.Combine(sistem, "vcruntime140_1.dll"))}  <-- ONNX Runtime bunu ister");
+                AppLog($"   MSVCP140.dll       : {Durum(Path.Combine(sistem, "msvcp140.dll"))}");
+                AppLog("   Bu dosyalardan biri YOK ise: Microsoft Visual C++ 2015-2022 Redistributable (x64) kurun ve bilgisayari yeniden baslatin.");
+            }
+            catch { }
         }
 
         private void InitTesseract()
@@ -133,7 +170,9 @@ namespace Otopark.Client.Helpers
             catch (Exception ex)
             {
                 // Tesseract opsiyonel - basarisiz olsa da ONNX ile devam.
-                AppLog($"Tesseract baslatilamadi: {ex.Message} - yedek OCR devre disi, ONNX ile devam ediliyor.");
+                AppLog($"Tesseract baslatilamadi: {ex.Message}"
+                     + (ex.InnerException != null ? $" | IC SEBEP: {ex.InnerException.Message}" : "")
+                     + " - yedek OCR devre disi, ONNX ile devam ediliyor.");
                 _engine = null;
             }
         }

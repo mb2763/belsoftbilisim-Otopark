@@ -55,7 +55,13 @@ namespace Otopark.Client.Helpers
             }
             catch (Exception ex)
             {
-                AppLog($"ONNX detector yuklenemedi: {ex.Message}");
+                // IC SEBEP SART (17.09.2026 - HUNAT saha vakasi): tek basina
+                // "The type initializer for 'Microsoft.ML.OnnxRuntime.NativeMethods'
+                // threw an exception" hangi DLL'in eksik oldugunu SOYLEMIYOR; gercek
+                // sebep (orn. "Unable to load DLL 'onnxruntime' ... 0x8007007E" =
+                // VC++ Runtime eksik) ic istisnada duruyor.
+                AppLog($"ONNX detector yuklenemedi: {ex.Message}"
+                     + (ex.InnerException != null ? $" | IC SEBEP: {ex.InnerException.Message}" : ""));
                 _session = null;
             }
         }

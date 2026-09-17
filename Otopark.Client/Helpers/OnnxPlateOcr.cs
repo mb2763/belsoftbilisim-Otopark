@@ -90,7 +90,9 @@ namespace Otopark.Client.Helpers
             }
             catch (Exception ex)
             {
-                AppLog($"ONNX OCR yuklenemedi: {ex.Message}");
+                // IC SEBEP SART (17.09.2026) - bkz. OnnxPlateDetector'daki aciklama.
+                AppLog($"ONNX OCR yuklenemedi: {ex.Message}"
+                     + (ex.InnerException != null ? $" | IC SEBEP: {ex.InnerException.Message}" : ""));
                 _session = null;
             }
         }
