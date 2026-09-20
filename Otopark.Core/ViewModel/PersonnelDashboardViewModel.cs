@@ -178,6 +178,19 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     public Otopark.Core.Offline.CihazKimligi? OfflineCihazKimligi { get; set; }
     public Otopark.Core.Offline.SahaOfflineClient? OfflineSahaClient { get; set; }
 
+    /// <summary>
+    /// KİOSK LAN ÖDEME BİLDİRİMİ (21.09.2026). Kiosk çevrimdışı bir ödeme aldığında LAN
+    /// üzerinden haber verir; burada YALNIZCA personele gösterilir + olay kaydına yazılır.
+    /// Bariyer kararını DEĞİŞTİRMEZ: bildirim tek başına "borç kapandı" sayılmaz (kiosk'un
+    /// kendi kuyruğu sunucuya ulaşınca borç zaten kapanacak). Personel acele ediyorsa
+    /// fişteki kodu görüp "Borçlu Çıkış" ile aracı çıkarabilir - iz kalır.
+    /// </summary>
+    public void KioskOdemeBildirimi(string plaka, decimal tutar, string dogrulamaKodu)
+    {
+        ShowToast($"KİOSK ÖDEMESİ (çevrimdışı): {plaka} — {tutar:0.##} TL (Kod: {dogrulamaKodu}). " +
+                  "Bağlantı gelince sisteme işlenecek.", true);
+    }
+
     [ObservableProperty] private bool isOffline;
     [ObservableProperty] private bool isSenkron;
     [ObservableProperty] private string offlineDurumMetni = "";

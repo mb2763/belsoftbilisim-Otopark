@@ -20,12 +20,14 @@ public partial class LoginViewModel : ObservableObject
     private readonly IslemKuyrugu _offlineKuyruk;
     private readonly AnlikGoruntu _offlineAnlik;
     private readonly BaglantiDurumu _baglanti;
+    private readonly SahaAjaniSunucusu? _sahaAjani;
     private static bool _offlineDonguBaslatildi;
 
     public LoginViewModel(AuthApiService auth, ZoneApiService zone, MainViewModel main,
         CihazKimligi cihazKimligi, SahaOfflineClient sahaClient, IslemKuyrugu offlineKuyruk,
-        AnlikGoruntu offlineAnlik, BaglantiDurumu baglanti)
+        AnlikGoruntu offlineAnlik, BaglantiDurumu baglanti, SahaAjaniSunucusu? sahaAjani = null)
     {
+        _sahaAjani = sahaAjani;
         _auth = auth;
         _zone = zone;
         _main = main;
@@ -207,6 +209,11 @@ public partial class LoginViewModel : ObservableObject
             dashboardVm.OfflineAnlik = _offlineAnlik;
             dashboardVm.OfflineCihazKimligi = _cihazKimligi;
             dashboardVm.OfflineSahaClient = _sahaClient;
+
+            // Kiosk LAN ödeme bildirimi -> dashboard toast'ı (21.09.2026).
+            if (_sahaAjani != null)
+                _sahaAjani.OdemeBildirimiAlindi += b =>
+                    dashboardVm.KioskOdemeBildirimi(b.Plaka, b.Tutar, b.DogrulamaKodu);
             if (dashboardVm.BolgeId > 0)
             {
                 _offlineAnlik.BolgeAyarla(UserSession.CompanyId, dashboardVm.BolgeId);

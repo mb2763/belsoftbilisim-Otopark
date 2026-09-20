@@ -139,6 +139,14 @@ public partial class App : Application
                     sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>(),
                     sp.GetRequiredService<Otopark.Core.Offline.SahaOfflineClient>(),
                     sp.GetRequiredService<Otopark.Core.Offline.CihazKimligi>().CihazId));
+                // ===== KİOSK↔MASAÜSTÜ LAN KÖPRÜSÜ (21.09.2026) — bkz. PLAN_OFFLINE_CALISMA.md Bölüm 8 =====
+                // Kiosk çevrimdışı ödeme aldığında masaüstüne doğrudan bildirir. Anahtar boşsa
+                // ya da URL ACL yoksa sessizce devre dışı kalır (masaüstü normal çalışır).
+                services.AddSingleton(sp => new Otopark.Core.Offline.SahaAjaniSunucusu(
+                    port: int.TryParse(Otopark.Core.Services.AppConfig.Configuration["Offline:SahaAjaniPort"], out var pp) ? pp : 5088,
+                    anahtar: Otopark.Core.Services.AppConfig.Configuration["Offline:SahaAjaniAnahtari"] ?? "",
+                    olayLogu: (tur, msg) => sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>().OlayYaz(tur, msg)));
+
                 services.AddSingleton(sp =>
                 {
                     var kuyruk = sp.GetRequiredService<Otopark.Core.Offline.IslemKuyrugu>();
@@ -190,6 +198,10 @@ public partial class App : Application
 
             var baglanti = _host.Services.GetRequiredService<Otopark.Core.Offline.BaglantiDurumu>();
             baglanti.Baslat(cevrimdisiAralik: System.TimeSpan.FromSeconds(cevrimdisiSn), cevrimiciAralik: System.TimeSpan.FromSeconds(cevrimiciSn));
+
+            // LAN köprüsü (kiosk ödeme bildirimi) — yalnızca "Offline:SahaAjaniAc": true ise.
+            if (bool.TryParse(cfg["Offline:SahaAjaniAc"], out var ajanAc) && ajanAc)
+                _host.Services.GetRequiredService<Otopark.Core.Offline.SahaAjaniSunucusu>().Baslat();
         }
         catch (Exception ex)
         {
