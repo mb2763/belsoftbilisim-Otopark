@@ -122,6 +122,41 @@ public partial class App : Application
                 // Madde 1: gun sonu Z raporu (mobildeki akisin exe karsiligi).
                 services.AddSingleton<ZReportApiService>();
 
+                // ===== ÇEVRİMDIŞI ÇALIŞMA (20.09.2026) — bkz. PLAN_OFFLINE_CALISMA.md =====
+                // Yerel veri varsayılan olarak C:\Otopark\offline altında (bu makineye özgü,
+                // taşınabilir değil); appsettings.json "Offline:VeriYolu" ile değiştirilebilir.
+                var offlineVeriYolu = Otopark.Core.Services.AppConfig.Configuration["Offline:VeriYolu"]
+                    ?? @"C:\Otopark\offline\otopark_offline.db";
+                services.AddSingleton(sp => new Otopark.Core.Offline.YerelDepo(offlineVeriYolu));
+                services.AddSingleton(sp => new Otopark.Core.Offline.CihazKimligi("Otopark.Client"));
+                services.AddSingleton(sp => new Otopark.Core.Offline.SahaOfflineClient(baseUrl, sp.GetRequiredService<Otopark.Core.Offline.CihazKimligi>()));
+                services.AddSingleton(sp => new Otopark.Core.Offline.IslemKuyrugu(
+                    sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>(),
+                    sp.GetRequiredService<Otopark.Core.Offline.SahaOfflineClient>(),
+                    sp.GetRequiredService<Otopark.Core.Offline.CihazKimligi>().CihazId,
+                    (tur, msg) => sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>().OlayYaz(tur, msg)));
+                services.AddSingleton(sp => new Otopark.Core.Offline.AnlikGoruntu(
+                    sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>(),
+                    sp.GetRequiredService<Otopark.Core.Offline.SahaOfflineClient>(),
+                    sp.GetRequiredService<Otopark.Core.Offline.CihazKimligi>().CihazId));
+                services.AddSingleton(sp =>
+                {
+                    var kuyruk = sp.GetRequiredService<Otopark.Core.Offline.IslemKuyrugu>();
+                    var depo = sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>();
+                    var baglanti = new Otopark.Core.Offline.BaglantiDurumu(
+                        sp.GetRequiredService<Otopark.Core.Offline.SahaOfflineClient>(),
+                        () => new Otopark.Core.Offline.SahaNabizIstek
+                        {
+                            CihazId = sp.GetRequiredService<Otopark.Core.Offline.CihazKimligi>().CihazId,
+                            BekleyenIslem = kuyruk.BekleyenSayisi(),
+                            RedIslem = kuyruk.RedSayisi(),
+                            SaatKaymasiSn = 0,
+                            Mod = "MASAUSTU"
+                        },
+                        (tur, msg) => depo.OlayYaz(tur, msg));
+                    return baglanti;
+                });
+
                 // Main Navigation VM
                 services.AddSingleton<MainViewModel>();
 
@@ -136,6 +171,30 @@ public partial class App : Application
                 services.AddSingleton<MainWindow>();
             })
             .Build();
+
+        // ===== ÇEVRİMDIŞI KATMAN AÇILIŞ İŞLERİ (20.09.2026) =====
+        // K6: bütünlük kontrolü + yarım kalmış (GONDERILIYOR) kalemleri BEKLIYOR'a çevir.
+        // Nabız döngüsü hemen başlar (cihaz henüz /Saha/Kaydol olmasa da CihazId ile
+        // dener; kayıtlı değilse ErisilebilirMiAsync sessizce false döner - zararsız).
+        try
+        {
+            var depo = _host.Services.GetRequiredService<Otopark.Core.Offline.YerelDepo>();
+            var (tamam, mesaj) = depo.ButunlukKontrolEt();
+            depo.OlayYaz("ACILIS", tamam ? "Bütünlük OK" : $"BÜTÜNLÜK SORUNU: {mesaj}");
+            depo.GunlukYedekAl(@"C:\Otopark\offline\yedek");
+            _host.Services.GetRequiredService<Otopark.Core.Offline.IslemKuyrugu>().AcilistaKurtar();
+
+            var cfg = Otopark.Core.Services.AppConfig.Configuration;
+            int cevrimdisiSn = int.TryParse(cfg["Offline:CevrimdisiNabizAralikSn"], out var v1) ? v1 : 10;
+            int cevrimiciSn = int.TryParse(cfg["Offline:CevrimiciNabizAralikSn"], out var v2) ? v2 : 60;
+
+            var baglanti = _host.Services.GetRequiredService<Otopark.Core.Offline.BaglantiDurumu>();
+            baglanti.Baslat(cevrimdisiAralik: System.TimeSpan.FromSeconds(cevrimdisiSn), cevrimiciAralik: System.TimeSpan.FromSeconds(cevrimiciSn));
+        }
+        catch (Exception ex)
+        {
+            LogCrash("OfflineInit", ex);
+        }
 
         // FIX 3 — ImageCache disk bakimi (boot-time, background).
         // Eski dosyalar / asiri buyuk dosyalar / 500MB+ klasor toplami temizlenir.

@@ -69,6 +69,27 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- ÇEVRİMDIŞI/SENKRON GÖSTERGESİ (20.09.2026) - bkz. PLAN_OFFLINE_CALISMA.md.
+                         Otopark.Core WPF'e bağımlı olamadığı için renk kararı burada, ViewModel'de
+                         yalnızca IsOffline/IsSenkron/OfflineDurumMetni verilir. -->
+                    <Border MinWidth="115" Margin="3" Background="#FDECEA" CornerRadius="10" Padding="8,6"
+                            BorderBrush="#E57373" BorderThickness="1"
+                            Visibility="{Binding IsOffline, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="ÇEVRİMDIŞI" Foreground="#C62828" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock Text="{Binding OfflineDurumMetni}" FontSize="11" FontWeight="Bold" Foreground="#C62828" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border MinWidth="115" Margin="3" Background="#FFF3E0" CornerRadius="10" Padding="8,6"
+                            BorderBrush="#FFB74D" BorderThickness="1"
+                            Visibility="{Binding IsSenkron, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="SENKRON" Foreground="#E65100" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock Text="{Binding OfflineDurumMetni}" FontSize="11" FontWeight="Bold" Foreground="#E65100" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
                     <Button Content="Kara Liste"
                             MinWidth="90" Height="36" Margin="3" FontSize="11"
                             Background="White" BorderBrush="#DDE3EE"

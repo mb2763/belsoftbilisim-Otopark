@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Otopark.Api.Services;
 using Otopark.Core.Session;
+using Otopark.Core.Offline;
 
 
 namespace Otopark.Core;
@@ -13,12 +14,26 @@ public partial class LoginViewModel : ObservableObject
     private readonly ZoneApiService _zone;
     private readonly MainViewModel _main;
 
+    // ===== ÇEVRİMDIŞI ÇALIŞMA (20.09.2026) — bkz. PLAN_OFFLINE_CALISMA.md =====
+    private readonly CihazKimligi _cihazKimligi;
+    private readonly SahaOfflineClient _sahaClient;
+    private readonly IslemKuyrugu _offlineKuyruk;
+    private readonly AnlikGoruntu _offlineAnlik;
+    private readonly BaglantiDurumu _baglanti;
+    private static bool _offlineDonguBaslatildi;
 
-    public LoginViewModel(AuthApiService auth, ZoneApiService zone, MainViewModel main)
+    public LoginViewModel(AuthApiService auth, ZoneApiService zone, MainViewModel main,
+        CihazKimligi cihazKimligi, SahaOfflineClient sahaClient, IslemKuyrugu offlineKuyruk,
+        AnlikGoruntu offlineAnlik, BaglantiDurumu baglanti)
     {
         _auth = auth;
         _zone = zone;
         _main = main;
+        _cihazKimligi = cihazKimligi;
+        _sahaClient = sahaClient;
+        _offlineKuyruk = offlineKuyruk;
+        _offlineAnlik = offlineAnlik;
+        _baglanti = baglanti;
 
         ZoneId = 1;
         LoginType = 3;
@@ -186,6 +201,18 @@ public partial class LoginViewModel : ObservableObject
             dashboardVm.BolgeId = (int)(SelectedZone?.Id ?? 0);
             dashboardVm.IsAdmin = isAdmin;
 
+            // ===== ÇEVRİMDIŞI KATMANI DASHBOARD'A BAĞLA (20.09.2026) =====
+            dashboardVm.OfflineBaglanti = _baglanti;
+            dashboardVm.OfflineKuyruk = _offlineKuyruk;
+            dashboardVm.OfflineAnlik = _offlineAnlik;
+            dashboardVm.OfflineCihazKimligi = _cihazKimligi;
+            dashboardVm.OfflineSahaClient = _sahaClient;
+            if (dashboardVm.BolgeId > 0)
+            {
+                _offlineAnlik.BolgeAyarla(UserSession.CompanyId, dashboardVm.BolgeId);
+                _ = OfflineBaslatAsync(dashboardVm.BolgeId);
+            }
+
             // Bolge listesini, kapasite ve tablo verilerini yukle
             _ = dashboardVm.LoadZoneCapacityAsync();
             if (dashboardVm.BolgeId > 0)
@@ -202,5 +229,66 @@ public partial class LoginViewModel : ObservableObject
         {
             ErrorMessage = "API Hatası: " + ex.Message;
         }
+    }
+
+    /// <summary>
+    /// ÇEVRİMDIŞI KATMAN BAŞLATMA (20.09.2026). Bkz. PLAN_OFFLINE_CALISMA.md Bölüm 7.1, 9.
+    ///
+    /// 1) Cihaz daha önce /Saha/Kaydol olmadıysa (ilk açılış) kaydolur; gizli anahtar
+    ///    DPAPI ile diske yazılır (CihazKimligi.KaydiTamamla). Sunucu erişilemezse
+    ///    sessizce vazgeçilir - bir sonraki başarılı çevrimiçi anda tekrar denenir.
+    /// 2) İlk anlık görüntü çekilir (abonelik/borç/tarife önbelleği olmadan çevrimdışı
+    ///    karar veremeyiz).
+    /// 3) Kuyruk boşaltma + anlık görüntü tazeleme döngüsü (yalnızca bir kez, uygulama
+    ///    ömrü boyunca) başlatılır: Senkron modda kuyruğu boşaltır, boşalınca
+    ///    BaglantiDurumu'nu Çevrimiçi'ye döndürür; Çevrimiçiyken anlık görüntüyü tazeler.
+    /// </summary>
+    private async Task OfflineBaslatAsync(long bolgeId)
+    {
+        try
+        {
+            if (!_cihazKimligi.Kayitli)
+            {
+                var yanit = await _sahaClient.KaydolAsync(new SahaKaydolIstek
+                {
+                    CihazId = _cihazKimligi.CihazId,
+                    Tur = "MASAUSTU",
+                    CompanyId = UserSession.CompanyId,
+                    ZoneId = bolgeId,
+                    Surum = "1.0",
+                    MakineAdi = Environment.MachineName
+                });
+                if (yanit?.Basarili == true && !string.IsNullOrEmpty(yanit.GizliAnahtar))
+                    _cihazKimligi.KaydiTamamla(yanit.GizliAnahtar);
+            }
+
+            await _offlineAnlik.TazeleAsync();
+        }
+        catch { /* kayıt/ilk tazeleme başarısızsa döngü yine de başlar, sonraki turlarda dener */ }
+
+        if (_offlineDonguBaslatildi) return;
+        _offlineDonguBaslatildi = true;
+
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                try
+                {
+                    if (_baglanti.Mod == OfflineMod.Senkron)
+                    {
+                        var gonderilen = await _offlineKuyruk.SenkronizeEtAsync();
+                        if (gonderilen == 0) _baglanti.SenkronTamamlandi();
+                    }
+                    else if (_baglanti.Mod == OfflineMod.Cevrimici)
+                    {
+                        await _offlineAnlik.TazeleAsync();
+                    }
+                }
+                catch { /* senkron döngüsü asla çökmemeli */ }
+
+                await Task.Delay(_baglanti.Mod == OfflineMod.Senkron ? TimeSpan.FromSeconds(3) : TimeSpan.FromMinutes(5));
+            }
+        });
     }
 }

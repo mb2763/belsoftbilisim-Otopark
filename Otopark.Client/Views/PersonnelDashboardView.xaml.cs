@@ -20,6 +20,9 @@ namespace Otopark.Client.Views
     {
         private readonly DispatcherTimer _uiTimer = new();          // Canli kamera goruntulerini guncelle (hizli)
         private readonly DispatcherTimer _detectTimer = new();      // OCR icin (yavas, kota tasarrufu)
+        // ÇEVRİMDIŞI DURUM GÖSTERGESİ (20.09.2026): Otopark.Core WPF Dispatcher'ına
+        // erişemediği için ViewModel.OfflineDurumTazele() UI thread'inden periyodik çağrılır.
+        private readonly DispatcherTimer _offlineTimer = new();
         private FileSystemWatcher? _entryWatcher;
         private FileSystemWatcher? _exitWatcher;
 
@@ -342,6 +345,7 @@ namespace Otopark.Client.Views
             {
                 _uiTimer.Stop();
                 _detectTimer.Stop();
+                _offlineTimer.Stop();
                 _entryWatcher?.Dispose();
                 _exitWatcher?.Dispose();
                 _cameraCts.Cancel();
@@ -405,6 +409,13 @@ namespace Otopark.Client.Views
                 finally { _tickBusy = false; }
             };
             _detectTimer.Start();
+
+            _offlineTimer.Interval = TimeSpan.FromSeconds(2);
+            _offlineTimer.Tick += (_, __) =>
+            {
+                if (DataContext is PersonnelDashboardViewModel vm) vm.OfflineDurumTazele();
+            };
+            _offlineTimer.Start();
         }
 
         // ===== WATCHER =====

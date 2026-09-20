@@ -166,6 +166,47 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
     public LookupApiService LookupApi => _lookupApi;
 
+    // ===================== ÇEVRİMDIŞI ÇALIŞMA (20.09.2026) =====================
+    // Bkz. PLAN_OFFLINE_CALISMA.md. LoginViewModel, giriş başarılı olunca bu üç
+    // singleton'ı DOLDURUR (bkz. LoginViewModel.LoginAsync). Null ise (offline
+    // katmanı hiç kurulmamışsa) mevcut ÇEVRİMİÇİ davranış AYNEN sürer.
+    public Otopark.Core.Offline.BaglantiDurumu? OfflineBaglanti { get; set; }
+    public Otopark.Core.Offline.IslemKuyrugu? OfflineKuyruk { get; set; }
+    public Otopark.Core.Offline.AnlikGoruntu? OfflineAnlik { get; set; }
+    // Logout() sonrası yeni LoginViewModel'in AYNI (DI) singleton'ları kullanması için
+    // (bkz. Logout() - Otopark.Core, App.Services'e erişemediğinden burada taşınır).
+    public Otopark.Core.Offline.CihazKimligi? OfflineCihazKimligi { get; set; }
+    public Otopark.Core.Offline.SahaOfflineClient? OfflineSahaClient { get; set; }
+
+    [ObservableProperty] private bool isOffline;
+    [ObservableProperty] private bool isSenkron;
+    [ObservableProperty] private string offlineDurumMetni = "";
+
+    /// <summary>
+    /// UI tarafındaki bir DispatcherTimer'dan (PersonnelDashboardView code-behind) periyodik
+    /// çağrılır — ViewModel (Otopark.Core) WPF Dispatcher'ına erişemediği için arka plandan
+    /// property güncellemesi YAPILMAZ, bu metot her zaman UI thread'inden çağrılmalıdır.
+    /// </summary>
+    public void OfflineDurumTazele()
+    {
+        if (OfflineBaglanti == null) { IsOffline = false; IsSenkron = false; OfflineDurumMetni = ""; return; }
+
+        IsOffline = OfflineBaglanti.Mod == Otopark.Core.Offline.OfflineMod.Cevrimdisi;
+        IsSenkron = OfflineBaglanti.Mod == Otopark.Core.Offline.OfflineMod.Senkron;
+
+        var bekleyen = OfflineKuyruk?.BekleyenSayisi() ?? 0;
+        var enEski = OfflineKuyruk?.EnEskiBekleyenTarihi();
+
+        if (IsOffline)
+            OfflineDurumMetni = enEski.HasValue
+                ? $"ÇEVRİMDIŞI · {bekleyen} işlem bekliyor · en eski {enEski.Value:HH:mm}"
+                : "ÇEVRİMDIŞI";
+        else if (IsSenkron)
+            OfflineDurumMetni = $"SENKRON · {bekleyen} kaldı";
+        else
+            OfflineDurumMetni = "";
+    }
+
     public PersonnelDashboardViewModel(MainViewModel main, VehicleParkApiService vehicleApi,
         VehicleDefinitionApiService vehicleDefApi, ZoneApiService zoneApi,
         VehicleParkQueryService parkQuery, LookupApiService lookupApi)
@@ -615,6 +656,15 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         // engellemek, sonradan duzeltilemeyen kayit uretmekten iyidir.
         if (!BolgeGecerliMi()) return;
 
+        // ===== ÇEVRİMDIŞI DALLANMA (20.09.2026, PLAN_OFFLINE_CALISMA.md) =====
+        // Sunucuya erişilemiyorsa online akışın TAMAMI atlanır (aşağıdaki hiçbir
+        // satır çalışmaz) ve ayrı, yerel kuyruğa yazan bir akışa geçilir.
+        if (OfflineBaglanti != null && OfflineBaglanti.Mod != Otopark.Core.Offline.OfflineMod.Cevrimici)
+        {
+            await DoApproveEntryOfflineAsync();
+            return;
+        }
+
         var plate = EntryDetectedPlate.Trim();
         var photo = _entryPendingPhotoBase64;
 
@@ -899,6 +949,114 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         catch (Exception ex)
         {
             ShowToast("API Hatasi: " + ex.Message, false);
+        }
+    }
+
+    /// <summary>
+    /// ÇEVRİMDIŞI GİRİŞ (20.09.2026). Bkz. PLAN_OFFLINE_CALISMA.md Bölüm 6.1, K1/K3.
+    ///
+    /// Sunucuya HİÇ gidilmez. Mükerrer-giriş ve kapasite kontrolü, o an ekranda olan
+    /// _allVehicles listesi (bu oturumda hem çevrimiçiyken yüklenmiş hem çevrimdışı
+    /// eklenmiş satırları içerir) ile AnlikGoruntu'nun (sunucudan en son çekilen
+    /// önbellek) abonelik bilgisi birlikte kullanılır. K1 gereği: kuyruğa YAZMA
+    /// tamamlanmadan (Ekle() dönmeden) bariyer AÇILMAZ.
+    /// </summary>
+    private async Task DoApproveEntryOfflineAsync()
+    {
+        if (OfflineKuyruk == null)
+        {
+            ShowToast("Çevrimdışı katman kurulmadı; giriş işlenemedi.", false);
+            return;
+        }
+
+        var plate = EntryDetectedPlate.Trim();
+        var photo = _entryPendingPhotoBase64;
+
+        var recentSimilar = _allVehicles
+            .Where(v => v.ExitDateTime == null && v.ParkType != "Iptal")
+            .Where(v => (DateTime.Now - v.EntryDateTime).TotalMinutes <= 5)
+            .Select(v => new { Row = v, Dist = LevenshteinDistance(v.Plate, plate) })
+            .Where(x => x.Dist <= 2)
+            .OrderBy(x => x.Dist)
+            .FirstOrDefault();
+
+        if (recentSimilar != null)
+        {
+            var dk = (int)(DateTime.Now - recentSimilar.Row.EntryDateTime).TotalMinutes;
+            ShowToast($"[ÇEVRİMDIŞI] Bu araç zaten içerde: {recentSimilar.Row.Plate} ({dk} dk önce giriş yaptı).", false);
+            return;
+        }
+
+        if (TotalCapacity > 0 && CurrentVehicleCount >= TotalCapacity)
+        {
+            var aboneMi = OfflineAnlik?.AktifAbonelik(plate, BolgeId) != null;
+            if (!aboneMi)
+            {
+                ShowToast($"[ÇEVRİMDIŞI] Otopark dolu ({CurrentVehicleCount}/{TotalCapacity}), sadece abonelere açık. {plate} girişi yapılamaz.", false);
+                return;
+            }
+        }
+
+        try
+        {
+            var anlik = OfflineAnlik;
+            var arac = anlik?.AracBul(plate);
+            long aracTipiId = arac?.AracTipiId ?? anlik?.OtoAracTipiOku() ?? 0;
+            long tarifeId = arac?.TarifeId ?? anlik?.OtoTarifeOku() ?? 0;
+            var abonelik = anlik?.AktifAbonelik(plate, BolgeId);
+            bool aboneMi = abonelik != null;
+
+            var yerelLabel = Guid.NewGuid().ToString("N");
+            var girisZamani = DateTime.Now;
+
+            var govde = new Otopark.Core.Offline.OfflineGirisGovdesi
+            {
+                Plate = plate,
+                VehicleTypeId = aracTipiId,
+                TariffId = tarifeId,
+                CustomerCompanyId = arac?.MusteriFirmaId ?? 0,
+                WarningCheck = false,
+                WarningNote = "",
+                Photo = string.IsNullOrEmpty(photo) ? null : $"data:image/jpg;base64,{photo}"
+            };
+
+            // K1: bariyer, kuyruğa yazma TAMAMLANDIKTAN (Ekle() döndükten) SONRA açılır.
+            var islemNo = OfflineKuyruk.Ekle("GIRIS", plate, UserSession.CompanyId, BolgeId, UserSession.UserId,
+                girisZamani, govde, yerelGirisId: yerelLabel);
+
+            BariyeriHemenAc(plate);
+
+            var row = new VehicleRow
+            {
+                EntryId = 0, // sunucu kimliği senkronda gelecek
+                Plate = plate,
+                ParkingName = LoggedZoneName,
+                ParkType = "Giris",
+                EntryDateTime = girisZamani,
+                EntryPlateImagePath = GetFirstSnapshotPath(isEntry: true),
+                OldDebt = 0,
+                // Girişte borç YAZILMAZ (online akışla aynı): ücret çıkışta hesaplanıp kuyruğa yazılır.
+                CurrentDebt = 0,
+                EntryType = aboneMi ? "A" : "N",
+                IsSubscriber = aboneMi,
+                SubscriptionName = abonelik?.TarifeAdi ?? "",
+                YerelGirisId = yerelLabel,
+                OfflineGirisIslemNo = islemNo
+            };
+            row.TotalDebt = row.OldDebt + row.CurrentDebt;
+
+            _allVehicles.Insert(0, row);
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+
+            ShowToast($"[ÇEVRİMDIŞI] {plate} girişi yerel kaydedildi, bariyer açıldı. Bağlantı gelince sunucuya gönderilecek.", true);
+
+            EntryDetectedPlate = "";
+            _entryPendingPhotoBase64 = "";
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Çevrimdışı giriş hatası: " + ex.Message, false);
         }
     }
 
@@ -1364,6 +1522,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         // BOLGESIZ ISLEM YOK (bkz. DoApproveEntryAsync). Bolge bilinmeden
         // "bu bolgeye ait borc" hesaplanamaz; borclu arac serbest gecerdi.
         if (!BolgeGecerliMi()) return;
+
+        // ===== ÇEVRİMDIŞI DALLANMA (20.09.2026) — bkz. DoApproveEntryOfflineAsync =====
+        if (OfflineBaglanti != null && OfflineBaglanti.Mod != Otopark.Core.Offline.OfflineMod.Cevrimici)
+        {
+            await DoApproveExitOfflineAsync();
+            return;
+        }
 
         var plate = ExitDetectedPlate.Trim();
 
@@ -1984,6 +2149,97 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     }
 
     /// <summary>
+    /// ÇEVRİMDIŞI ÇIKIŞ (20.09.2026). Bkz. PLAN_OFFLINE_CALISMA.md Bölüm 6.2.
+    ///
+    /// K1: bu plakanın AÇIK bir girişi (_allVehicles'ta) yoksa bariyer AÇILMAZ —
+    /// personel "Borçlu Çıkış" düğmesini kullanmalıdır (BorcluCikisYapAsync, aşağıda
+    /// ayrıca çevrimdışı dallanır ve gerekiyorsa geriye dönük giriş de o akışta yazılır).
+    /// Ödeme kanalı (kiosk/Pavo) offline masaüstünden erişilemez; bu yüzden mevcut borç
+    /// (anlık görüntüdeki eski borç + bu konaklamanın henüz sunucuya yazılmamış ücreti)
+    /// sıfırın üzerindeyse çıkış burada da REDDEDİLİR (fail-closed, online ile aynı kural).
+    /// </summary>
+    private async Task DoApproveExitOfflineAsync()
+    {
+        if (OfflineKuyruk == null)
+        {
+            ShowToast("Çevrimdışı katman kurulmadı; çıkış işlenemedi.", false);
+            return;
+        }
+
+        var plate = ExitDetectedPlate.Trim();
+        var anlik = OfflineAnlik;
+
+        var row = _allVehicles.FirstOrDefault(v =>
+            PlakaAyniMi(v.Plate, plate) && v.ExitDateTime == null && v.ParkType != "Iptal");
+
+        if (row == null)
+        {
+            ShowToast($"[ÇEVRİMDIŞI] {plate}: Giriş kaydı bulunamadı. Bariyer açılmadı — " +
+                      "gerekiyorsa \"Borçlu Çıkış\" ile geriye dönük giriş oluşturup çıkışı tamamlayın.", false);
+            return;
+        }
+
+        try
+        {
+            bool aboneMi = row.IsSubscriber || (anlik?.AktifAbonelik(plate, BolgeId) != null);
+            long aracTipiId = anlik?.AracBul(plate)?.AracTipiId ?? row.VehicleTypeId;
+
+            decimal yerelUcret = 0m;
+            if (!aboneMi && anlik != null)
+            {
+                var sonuc = Otopark.Core.Offline.YerelUcretHesabi.Hesapla(anlik, plate, BolgeId, row.EntryDateTime, DateTime.Now, aboneMi, false, aracTipiId);
+                if (!sonuc.Hata) yerelUcret = sonuc.Fiyat;
+            }
+
+            decimal eskiBorc = anlik?.AcikBorcToplam(plate, BolgeId) ?? 0m;
+            // Bu giriş ÇEVRİMDIŞI açıldıysa (EntryId=0) ücreti henüz hiçbir yerde borç
+            // olarak yazılmadı — bu konaklamanın ücreti burada eklenmezse bedava çıkar.
+            // Sunucuda AÇILMIŞ bir girişin (EntryId>0) ücreti zaten girişte borçlandırılmış
+            // ve anlık görüntüdeki eskiBorc'a yansımıştır; tekrar eklenirse ÇİFT SAYILIR.
+            decimal buKonaklama = row.EntryId <= 0 ? yerelUcret : 0m;
+            decimal toplamBorc = eskiBorc + buKonaklama;
+
+            bool ucretsizCikis = aboneMi || toplamBorc <= 0;
+
+            if (!ucretsizCikis)
+            {
+                ShowToast($"[ÇEVRİMDIŞI] {plate}: {toplamBorc:0.##} TL borç var, bağlantı yokken tahsil edilemez. " +
+                          "Kiosk erişilebilirse oradan ödeme alın; aksi halde \"Borçlu Çıkış\" ile bilerek çıkarın.", false);
+                return;
+            }
+
+            var govde = new Otopark.Core.Offline.OfflineKapaliCikisGovdesi
+            {
+                EntryId = row.EntryId > 0 ? row.EntryId : null,
+                UcretsizCikis = true,
+                Neden = aboneMi ? "ABONE" : "UCRETSIZ",
+                YerelUcret = yerelUcret
+            };
+
+            OfflineKuyruk.Ekle("KAPALI_CIKIS", plate, UserSession.CompanyId, BolgeId, UserSession.UserId,
+                DateTime.Now, govde, yerelGirisId: row.YerelGirisId, bagliIslemNo: row.OfflineGirisIslemNo);
+
+            if (OnOpenExitGateRequested != null)
+                await OnOpenExitGateRequested.Invoke(plate);
+
+            row.ExitDateTime = DateTime.Now;
+            row.ParkType = "Cikis";
+            row.ExitFee = yerelUcret;
+            row.CurrentDebt = 0;
+            row.TotalDebt = row.OldDebt;
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+
+            ShowToast($"[ÇEVRİMDIŞI] {plate} çıkışı yerel kaydedildi, bariyer açıldı.", true);
+            ExitDetectedPlate = "";
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Çevrimdışı çıkış hatası: " + ex.Message, false);
+        }
+    }
+
+    /// <summary>
     /// Cikista plaka var ama giris yoksa, 15 dakika oncesine geriye donuk giris olusturur.
     /// Borc sorgulamasi bu girise gore yapilir. EntryId doner.
     /// </summary>
@@ -2058,8 +2314,117 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         catch { return false; }
     }
 
+    /// <summary>
+    /// ÇEVRİMDIŞI BORÇLU ÇIKIŞ (20.09.2026, Karar K1). Bkz. PLAN_OFFLINE_CALISMA.md Bölüm 6.2/14.
+    ///
+    /// K1 tam olarak bunun için var: normal çıkış akışı (DoApproveExitOfflineAsync) giriş
+    /// kaydı yoksa ya da borç varsa bariyeri KENDİLİĞİNDEN açmaz; personel bilerek bu
+    /// düğmeyi kullanır. Satır sunucuda hiç bilinmiyorsa (row.EntryId&lt;=0 ve bu oturumda
+    /// da çevrimdışı açılmamışsa, ör. çevrimdışı moda geçmeden hemen önce sunucudan yüklenen
+    /// bir satırın girişi bir şekilde bulunamıyorsa) burada 15 dk geriye dönük bir GİRİŞ
+    /// kalemi de yazılır — tıpkı online CreateAutoBackdatedEntryAsync gibi, ama yerel kuyruğa.
+    /// </summary>
+    private async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapOfflineAsync(VehicleRow? row)
+    {
+        if (row == null || string.IsNullOrWhiteSpace(row.Plate))
+            return (false, "Once listeden arac seciniz.", false);
+        if (OfflineKuyruk == null)
+            return (false, "Çevrimdışı katman kurulmadı; işlem yapılamadı.", false);
+
+        try
+        {
+            var plate = row.Plate.Trim();
+            var anlik = OfflineAnlik;
+            bool aboneMi = row.IsSubscriber || (anlik?.AktifAbonelik(plate, BolgeId) != null);
+            long aracTipiId = anlik?.AracBul(plate)?.AracTipiId ?? row.VehicleTypeId;
+
+            // Satırın hiçbir girişi yok (ne sunucuda ne bu oturumda çevrimdışı açılmış) ->
+            // K1: 15 dk geriye dönük GİRİŞ yerel kuyruğa yazılır, ÇIKIŞ ona bağlanır.
+            if (row.EntryId <= 0 && string.IsNullOrEmpty(row.OfflineGirisIslemNo))
+            {
+                var geriZaman = DateTime.Now.AddMinutes(-15);
+                var girisGovde = new Otopark.Core.Offline.OfflineGirisGovdesi
+                {
+                    Plate = plate,
+                    VehicleTypeId = aracTipiId,
+                    TariffId = anlik?.AracBul(plate)?.TarifeId ?? anlik?.OtoTarifeOku() ?? 0,
+                    CustomerCompanyId = anlik?.AracBul(plate)?.MusteriFirmaId ?? 0
+                };
+                var yerelLabel = row.YerelGirisId ?? Guid.NewGuid().ToString("N");
+                var girisIslemNo = OfflineKuyruk.Ekle("GIRIS", plate, UserSession.CompanyId, BolgeId, UserSession.UserId,
+                    geriZaman, girisGovde, yerelGirisId: yerelLabel);
+
+                row.EntryDateTime = geriZaman;
+                row.YerelGirisId = yerelLabel;
+                row.OfflineGirisIslemNo = girisIslemNo;
+
+                OfflineKuyruk.Ekle("NOT", plate, UserSession.CompanyId, BolgeId, UserSession.UserId, DateTime.Now,
+                    new Otopark.Core.Offline.OfflineNotGovdesi { Not = $"[ÇEVRİMDIŞI] Giriş kaydı bulunamadı; 15 dk geriye dönük oluşturuldu (Kullanıcı: {UserSession.UserId})." },
+                    yerelGirisId: yerelLabel, bagliIslemNo: girisIslemNo);
+            }
+
+            decimal yerelUcret = 0m;
+            if (!aboneMi && anlik != null)
+            {
+                var sonuc = Otopark.Core.Offline.YerelUcretHesabi.Hesapla(anlik, plate, BolgeId, row.EntryDateTime, DateTime.Now, aboneMi, false, aracTipiId);
+                if (!sonuc.Hata) yerelUcret = sonuc.Fiyat;
+            }
+            decimal eskiBorc = anlik?.AcikBorcToplam(plate, BolgeId) ?? 0m;
+            decimal borc = row.EntryId <= 0 ? (eskiBorc + yerelUcret) : Math.Max(eskiBorc, yerelUcret);
+            bool borcsuzCikis = aboneMi || borc <= 0;
+
+            bool onay = borcsuzCikis
+                ? true
+                : OnConfirmRequired != null
+                ? await OnConfirmRequired.Invoke(
+                    "Borclu Cikisi Yap (ÇEVRİMDIŞI)",
+                    $"{plate} plakali aracin {borc:0.##} TL borcu var (sunucuya ulasilamiyor, tahsilat yapilamaz).\n\n" +
+                    "Arac BORCLANDIRILARAK cikarilacak; islem sunucuya baglanti gelince islenecek.\n\n" +
+                    "Onayliyor musunuz?")
+                : true;
+
+            if (!onay)
+                return (false, $"{plate}: İşlem iptal edildi. Borç {borc:0.##} TL.", false);
+
+            string personelNotu = borcsuzCikis
+                ? $"[ÇEVRİMDIŞI] Borçsuz çıkış - kayıt oluşturuldu ({LoggedZoneName}, Kullanıcı: {UserSession.UserId})"
+                : $"[ÇEVRİMDIŞI] Personel bariyeri açtı - borçlandırılarak çıkış yapıldı ({LoggedZoneName}, Kullanıcı: {UserSession.UserId})";
+
+            var cikisGovde = new Otopark.Core.Offline.OfflineKapaliCikisGovdesi
+            {
+                EntryId = row.EntryId > 0 ? row.EntryId : null,
+                UcretsizCikis = borcsuzCikis,
+                Neden = borcsuzCikis ? (aboneMi ? "ABONE" : "UCRETSIZ") : "BORCLU",
+                YerelUcret = yerelUcret,
+                PersonelAciklama = personelNotu
+            };
+
+            OfflineKuyruk.Ekle("KAPALI_CIKIS", plate, UserSession.CompanyId, BolgeId, UserSession.UserId,
+                DateTime.Now, cikisGovde, yerelGirisId: row.YerelGirisId, bagliIslemNo: row.OfflineGirisIslemNo);
+
+            row.ExitDateTime = DateTime.Now;
+            row.ParkType = "Cikis";
+            row.ExitFee = yerelUcret;
+            row.CurrentDebt = 0;
+            row.TotalDebt = row.OldDebt;
+            UpdateParkCounts();
+            ApplyFiltersInternal();
+
+            return (true, borcsuzCikis
+                ? $"[ÇEVRİMDIŞI] {plate}: çıkış yerel kaydedildi, bariyer açılıyor."
+                : $"[ÇEVRİMDIŞI] {plate}: {borc:0.##} TL BORÇLANDIRILARAK çıkış yerel kaydedildi. Borç açık kaldı.", true);
+        }
+        catch (Exception ex)
+        {
+            return (true, $"{row.Plate}: Çevrimdışı borç durumu doğrulanamadı ({ex.Message}). Bariyer personel onayıyla açılıyor.", false);
+        }
+    }
+
     public async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapAsync(VehicleRow? row)
     {
+        if (OfflineBaglanti != null && OfflineBaglanti.Mod != Otopark.Core.Offline.OfflineMod.Cevrimici)
+            return await BorcluCikisYapOfflineAsync(row);
+
         if (row == null || string.IsNullOrWhiteSpace(row.Plate))
             return (false, "Once listeden arac seciniz.", false);
 
@@ -2742,7 +3107,11 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         var http = _zoneApi.Http;
         var auth = new AuthApiService(http);
         var zone = new ZoneApiService(http);
-        var loginVm = new LoginViewModel(auth, zone, _main);
+        // Çevrimdışı singleton'lar (CihazKimligi/SahaOfflineClient/Kuyruk/Anlik/Baglanti)
+        // AYNEN taşınır - yeni bir tanesi kurulursa BaglantiDurumu ikinci bir nabız
+        // döngüsü başlatır ve kuyruk/önbellek durumu sıfırlanmış görünür.
+        var loginVm = new LoginViewModel(auth, zone, _main,
+            OfflineCihazKimligi!, OfflineSahaClient!, OfflineKuyruk!, OfflineAnlik!, OfflineBaglanti!);
         _main.Navigate(loginVm);
     }
 
@@ -2783,6 +3152,14 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         [ObservableProperty] private string entryType = "N";          // "A" veya "N"
         [ObservableProperty] private bool isSubscriber;               // true => A
         [ObservableProperty] private string subscriptionName = "";    // sadece abone ise dolu
+
+        // ===== ÇEVRİMDIŞI (20.09.2026) ===== EntryId henüz sunucudan gelmediyse (offline
+        // girişte 0'dır) bu satırı yerel kuyruktaki GİRİŞ kalemine bağlamak için kullanılır.
+        // YerelGirisId: giris_esleme etiketi (SunucuEntryIdBul ile aranır). OfflineGirisIslemNo:
+        // aynı GİRİŞ kalemin islem_no'su - aynı oturumda ÇIKIŞ/BORÇ kalemi bagli_islem_no
+        // olarak DOĞRUDAN buna bağlanır (K3 sıralama garantisi, sunucu senkronunu beklemez).
+        [ObservableProperty] private string? yerelGirisId;
+        [ObservableProperty] private string? offlineGirisIslemNo;
 
         // Kara liste: gecmis (odenmemis) borcu olan arac. Tabloda satir arka plani siyah olur.
         public bool IsBlacklisted => OldDebt > 0m;

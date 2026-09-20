@@ -8,6 +8,10 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <!-- CEVRIMDISI CALISMA (20.09.2026) - yerel kuyruk/onbellek depolama. Bkz. Offline\YerelDepo.cs. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- DPAPI (ProtectedData) - net8.0 (Windows olmayan) hedefte ayri paket gerektirir. Bkz. Offline\CihazKimligi.cs. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
