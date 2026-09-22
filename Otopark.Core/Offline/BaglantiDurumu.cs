@@ -60,6 +60,7 @@ public sealed class BaglantiDurumu
             try
             {
                 var basarili = await _client.ErisilebilirMiAsync(_nabizBilgisiUret(), ct);
+                if (_client.SonOfflineIzinli is bool izin) _offlineIzinli = izin;
                 if (basarili)
                 {
                     _ardisikHata = 0;

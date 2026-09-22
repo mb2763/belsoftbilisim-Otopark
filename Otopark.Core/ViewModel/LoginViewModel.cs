@@ -250,25 +250,32 @@ public partial class LoginViewModel : ObservableObject
     ///    ömrü boyunca) başlatılır: Senkron modda kuyruğu boşaltır, boşalınca
     ///    BaglantiDurumu'nu Çevrimiçi'ye döndürür; Çevrimiçiyken anlık görüntüyü tazeler.
     /// </summary>
+    private DateTime _sonKayitDenemesi = DateTime.MinValue;
+
+    /// <summary>Cihaz kayıtlı değilse /Saha/Kaydol'u dener (en çok 5 dk'da bir - sunucuyu yormasın).</summary>
+    private async Task CihazKaydolAsync(long bolgeId)
+    {
+        if (_cihazKimligi.Kayitli || DateTime.Now - _sonKayitDenemesi < TimeSpan.FromMinutes(5)) return;
+        _sonKayitDenemesi = DateTime.Now;
+
+        var yanit = await _sahaClient.KaydolAsync(new SahaKaydolIstek
+        {
+            CihazId = _cihazKimligi.CihazId,
+            Tur = "MASAUSTU",
+            CompanyId = UserSession.CompanyId,
+            ZoneId = bolgeId,
+            Surum = "1.0",
+            MakineAdi = Environment.MachineName
+        });
+        if (yanit?.Basarili == true && !string.IsNullOrEmpty(yanit.GizliAnahtar))
+            _cihazKimligi.KaydiTamamla(yanit.GizliAnahtar);
+    }
+
     private async Task OfflineBaslatAsync(long bolgeId)
     {
         try
         {
-            if (!_cihazKimligi.Kayitli)
-            {
-                var yanit = await _sahaClient.KaydolAsync(new SahaKaydolIstek
-                {
-                    CihazId = _cihazKimligi.CihazId,
-                    Tur = "MASAUSTU",
-                    CompanyId = UserSession.CompanyId,
-                    ZoneId = bolgeId,
-                    Surum = "1.0",
-                    MakineAdi = Environment.MachineName
-                });
-                if (yanit?.Basarili == true && !string.IsNullOrEmpty(yanit.GizliAnahtar))
-                    _cihazKimligi.KaydiTamamla(yanit.GizliAnahtar);
-            }
-
+            await CihazKaydolAsync(bolgeId);
             await _offlineAnlik.TazeleAsync();
         }
         catch { /* kayıt/ilk tazeleme başarısızsa döngü yine de başlar, sonraki turlarda dener */ }
@@ -276,25 +283,40 @@ public partial class LoginViewModel : ObservableObject
         if (_offlineDonguBaslatildi) return;
         _offlineDonguBaslatildi = true;
 
+        // Kuyruk ÇEVRİMİÇİ ve SENKRON modda, bekleyen iş varsa boşaltılır (yalnız senkron
+        // modda değil - çevrimiçiyken ağ hatasıyla kuyruğa düşen iş de gitsin). SenkronizeEtAsync
+        // 0 döndüğünde bu "boş" DEĞİL "gönderilemedi" de olabilir; mod yalnızca kuyruk GERÇEKTEN
+        // boşken çevrimiçiye döner. Kayıtsız cihaz senkron yapamaz (imza) -> kayıt da burada denenir.
         _ = Task.Run(async () =>
         {
             while (true)
             {
+                var hizliTur = false;
                 try
                 {
-                    if (_baglanti.Mod == OfflineMod.Senkron)
+                    if (_baglanti.Mod != OfflineMod.Cevrimdisi)
                     {
-                        var gonderilen = await _offlineKuyruk.SenkronizeEtAsync();
-                        if (gonderilen == 0) _baglanti.SenkronTamamlandi();
-                    }
-                    else if (_baglanti.Mod == OfflineMod.Cevrimici)
-                    {
-                        await _offlineAnlik.TazeleAsync();
+                        await CihazKaydolAsync(bolgeId);
+
+                        if (_offlineKuyruk.BekleyenSayisi() > 0)
+                        {
+                            await _offlineKuyruk.SenkronizeEtAsync();
+                            hizliTur = _offlineKuyruk.BekleyenSayisi() > 0 && _cihazKimligi.Kayitli;
+                        }
+                        else if (_baglanti.Mod == OfflineMod.Senkron)
+                        {
+                            _baglanti.SenkronTamamlandi();
+                        }
+
+                        var sonAlim = _offlineAnlik.SonBasariliAlim;
+                        if (_baglanti.Mod == OfflineMod.Cevrimici &&
+                            (sonAlim == null || DateTime.Now - sonAlim.Value > TimeSpan.FromMinutes(5)))
+                            await _offlineAnlik.TazeleAsync();
                     }
                 }
                 catch { /* senkron döngüsü asla çökmemeli */ }
 
-                await Task.Delay(_baglanti.Mod == OfflineMod.Senkron ? TimeSpan.FromSeconds(3) : TimeSpan.FromMinutes(5));
+                await Task.Delay(hizliTur ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(15));
             }
         });
     }

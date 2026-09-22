@@ -84,11 +84,37 @@ public sealed class SahaOfflineClient
         catch { return null; }
     }
 
-    /// <summary>Sunucu erişilebilir mi — yalnızca bağlantı kontrolü (hafif). Nabız başarısız olursa false.</summary>
+    /// <summary>Son başarılı nabızda sunucunun bildirdiği OfflineIzinli (K10). Henüz yoksa null.</summary>
+    public bool? SonOfflineIzinli { get; private set; }
+
+    /// <summary>
+    /// Sunucu ERİŞİLEBİLİR mi? Sunucudan HERHANGİ bir HTTP yanıtı gelirse (401/404/500 dahil)
+    /// erişilebilirdir. Yalnızca AĞ hatası (zaman aşımı, bağlantı reddi, DNS) ya da servis/ağ
+    /// geçidi kapalı (502/503/504) "erişilemez" sayılır. Aksi halde cihaz kayıtlı değilken ya da
+    /// saat kaymasından imza reddedilince masaüstü sunucu ayaktayken çevrimdışına geçerdi.
+    /// </summary>
     public async Task<bool> ErisilebilirMiAsync(SahaNabizIstek nabizIstek, CancellationToken ct = default)
     {
-        if (!_kimlik.Kayitli) return false;
-        var yanit = await NabizAsync(nabizIstek, ct);
-        return yanit?.Basarili == true;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "Saha/Nabiz") { Content = JsonContent.Create(nabizIstek) };
+            if (_kimlik.Kayitli) ImzaEkle(req);
+            using var resp = await _http.SendAsync(req, ct);
+
+            var kod = (int)resp.StatusCode;
+            if (kod == 502 || kod == 503 || kod == 504) return false;
+
+            if (resp.IsSuccessStatusCode)
+            {
+                try
+                {
+                    var yanit = await resp.Content.ReadFromJsonAsync<SahaNabizYanit>(JsonOpts, ct);
+                    if (yanit?.Basarili == true) SonOfflineIzinli = yanit.OfflineIzinli;
+                }
+                catch { /* gövde okunamasa da sunucu erişilebilir */ }
+            }
+            return true;
+        }
+        catch { return false; }
     }
 }
