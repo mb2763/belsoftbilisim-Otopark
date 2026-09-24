@@ -151,7 +151,10 @@ public partial class App : Application
                 {
                     var kuyruk = sp.GetRequiredService<Otopark.Core.Offline.IslemKuyrugu>();
                     var depo = sp.GetRequiredService<Otopark.Core.Offline.YerelDepo>();
-                    var baglanti = new Otopark.Core.Offline.BaglantiDurumu(
+                    // Mod: cihazin O ANKI baglanti modu (CEVRIMICI | CEVRIMDISI | SENKRON).
+                    // Onceden sabit "MASAUSTU" gidiyordu; SAHA_CIHAZ.SON_MOD'da cihaz tipi gorunuyordu.
+                    Otopark.Core.Offline.BaglantiDurumu? baglanti = null;
+                    baglanti = new Otopark.Core.Offline.BaglantiDurumu(
                         sp.GetRequiredService<Otopark.Core.Offline.SahaOfflineClient>(),
                         () => new Otopark.Core.Offline.SahaNabizIstek
                         {
@@ -159,7 +162,7 @@ public partial class App : Application
                             BekleyenIslem = kuyruk.BekleyenSayisi(),
                             RedIslem = kuyruk.RedSayisi(),
                             SaatKaymasiSn = 0,
-                            Mod = "MASAUSTU"
+                            Mod = (baglanti?.Mod ?? Otopark.Core.Offline.OfflineMod.Cevrimici).ToString().ToUpperInvariant()
                         },
                         (tur, msg) => depo.OlayYaz(tur, msg));
                     return baglanti;
