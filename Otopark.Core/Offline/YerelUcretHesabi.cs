@@ -14,7 +14,8 @@ namespace Otopark.Core.Offline;
 ///   abone/misafir -> 0
 ///   ucretsizDakika > 0 && totalMinute <= ucretsizDakika -> 0
 ///   kademe: UnitTimeStart <= totalMinute olanların en yüksek fiyatı (yoksa en yüksek UnitTimeFinish'li)
-///   kapalı otopark gün çarpanı: gun = floor(saniye/86400)+1; gunlukUcret (UnitTimeStart>=240 ilk kademe,
+///   kapalı otopark gün çarpanı: gun = TAKVİM GÜNÜ (giriş günü 1, gece 00:00 geçilince +1; 27.09.2026,
+///                                sunucuda KapaliOtoparkGun.GunSayisi); gunlukUcret (UnitTimeStart>=240 ilk kademe,
 ///                                yoksa en geniş) * gun; sonuç kademe fiyatının ALTINA düşmez.
 /// </summary>
 public static class YerelUcretHesabi
@@ -57,7 +58,8 @@ public static class YerelUcretHesabi
                 : tarife.Kademeler.OrderByDescending(k => k.bit).First().fiyat;
 
             // ===== KAPALI OTOPARK GÜN ÇARPANI (KapaliOtoparkGunCarpani ile aynı) =====
-            int gun = (int)Math.Floor(totalSecond / 86400.0) + 1;
+            // 27.09.2026: 24 saatlik dilim değil TAKVİM GÜNÜ (sunucudaki KapaliOtoparkGun ile aynı).
+            int gun = cikisZamani > girisZamani ? (cikisZamani.Date - girisZamani.Date).Days + 1 : 1;
             if (gun > 1)
             {
                 var gunlukKademe = tarife.Kademeler.Where(k => k.bas >= 240).OrderBy(k => k.bas).FirstOrDefault();
