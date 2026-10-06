@@ -70,6 +70,41 @@ public partial class VehicleParkApiService
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     }
 
+    /// <summary>
+    /// Borcu siler (sunucu: IS_DELETE = 1, arac CREDIT'i yeniden hesaplanir).
+    /// Basari = HTTP 2xx ve hata listesi bos. Sunucu mesai disinda reddedebilir;
+    /// o durumda hata metni doner, cagiran eski akisa devam eder.
+    /// </summary>
+    public async Task<(bool basarili, string? hata)> DeleteVehicleCreditAsync(long id, long currentUserId)
+    {
+        try
+        {
+            using var response = await _http.PostAsync(
+                $"VehicleParkCredit/DeleteVehicleCredit?id={id}&currentUserId={currentUserId}", null);
+            var json = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode) return (false, $"HTTP {(int)response.StatusCode}");
+
+            // Sunucu ModelResult doner; ad bicimi (errors / Errors) sunucu ayarina bagli.
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return (true, null);
+            foreach (var p in doc.RootElement.EnumerateObject())
+            {
+                if (!p.Name.Equals("errors", StringComparison.OrdinalIgnoreCase)) continue;
+                if (p.Value.ValueKind != JsonValueKind.Array || p.Value.GetArrayLength() == 0) break;
+
+                string? mesaj = null;
+                var ilk = p.Value[0];
+                if (ilk.ValueKind == JsonValueKind.Object)
+                    foreach (var q in ilk.EnumerateObject())
+                        if (q.Name.Equals("message", StringComparison.OrdinalIgnoreCase))
+                            mesaj = q.Value.ToString();
+                return (false, mesaj ?? "sunucu hatasi");
+            }
+            return (true, null);
+        }
+        catch (Exception ex) { return (false, ex.Message); }
+    }
+
     public async Task<double> GetParkPriceAsync(long entryId)
     {
         var url = "VehiclePark/GetParkPrice";

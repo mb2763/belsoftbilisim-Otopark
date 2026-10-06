@@ -2433,6 +2433,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
     }
 
+    /// <summary>Engelli tarifesinin ucretsiz penceresi (HUNAT: 0-930 dk 0 TL, sonrasi ucretli).</summary>
+    private const int ENGELLI_UCRETSIZ_DK = 930;
+
     public async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapAsync(VehicleRow? row)
     {
         if (OfflineBaglanti != null && OfflineBaglanti.Mod != Otopark.Core.Offline.OfflineMod.Cevrimici)
@@ -2476,6 +2479,56 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 catch { /* hesaplanamazsa 0 kalir */ }
             }
 
+            // ===== ENGELLI ARAC: 930 DK DOLMADIYSA BORCLANDIRILMAZ (06.10.2026) =====
+            //
+            // Saha: "Engelli araca elle cikis verince borca dusuyor, kendi okuyup cikinca
+            // borclanmiyor." Arac OTOMOBIL olarak girip (taninmayan plaka oto-kayit ya da
+            // eski kart) iceride ENGELLI yapilinca giriste yazilan 80 TL borc kaliyordu;
+            // bariyer acilmiyor, bu buton araci 80 TL BORCLU cikariyordu.
+            //
+            // Engelli tarifesi ilk 930 dk ucretsiz. Sure dolmadiysa BU ZIYARETE bagli, hic
+            // odenmemis borclar silinir ve cikis borcsuz yapilir. Sure dolduysa ya da borc
+            // silinemezse (sunucu mesai disi vb.) eski akis surer. Eski ziyaretlerin borcuna
+            // dokunulmaz.
+            bool engelliUcretsiz = false;
+            int engelliDk = 0;
+            if (row.EntryId > 0 && row.ExitDateTime == null)
+            {
+                await EnsureEngelliTipleriAsync();
+                bool engelli = _engelliVehicleTypeIds.Contains(vehicle.VehicleTypeId)
+                               || (vehicle.VehicleTypeName?.Contains("ENGELL", StringComparison.OrdinalIgnoreCase) ?? false);
+                engelliDk = (int)(DateTime.Now - row.EntryDateTime).TotalMinutes;
+
+                if (engelli && engelliDk < ENGELLI_UCRETSIZ_DK)
+                {
+                    string? silmeHatasi = null;
+                    decimal silinenBuBolge = 0m;
+                    try
+                    {
+                        var credits = await _vehicleApi.GetVehicleCreditsAsync(vehicle.Id);
+                        foreach (var c in credits.Where(c => c.VehicleEntryId == row.EntryId
+                                                             && c.PaidAmount == 0 && c.DebtAmount > 0))
+                        {
+                            var (ok, hata) = await _vehicleApi.DeleteVehicleCreditAsync(c.Id, UserSession.UserId);
+                            if (!ok) { silmeHatasi = hata ?? "bilinmeyen hata"; break; }
+                            if (c.ZoneId == BolgeId) silinenBuBolge += c.DebtAmount;
+                        }
+                    }
+                    catch (Exception exS) { silmeHatasi = exS.Message; }
+
+                    zoneDebt = Math.Max(0m, zoneDebt - silinenBuBolge);
+                    if (silmeHatasi == null)
+                    {
+                        parkUcreti = 0m;          // ucretsiz pencere: cikis kaydina ucret yazilmaz
+                        engelliUcretsiz = true;
+                    }
+                    else
+                    {
+                        ShowToast($"{row.Plate}: Engelli araç ({engelliDk} dk) ama giriş borcu silinemedi ({silmeHatasi}).", false);
+                    }
+                }
+            }
+
             // Gosterilecek borc: KAYITLI borc (girişte zaten yazildi).
             // DIKKAT: zoneDebt + parkUcreti TOPLANMAZ - ayni ucret iki kez sayilir
             // (girişte 80 borc yazilmis, GetParkPrice yine 80 doner -> 160 gorunurdu).
@@ -2515,7 +2568,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 return (false, $"{row.Plate}: Islem iptal edildi. Borc {borc:0.##} TL.", false);
 
             // ACIKLAMA'ya dusulecek personel notu
-            string personelNotu = borcsuzCikis
+            string personelNotu = engelliUcretsiz && borcsuzCikis
+                ? $"Engelli arac ({engelliDk} dk < {ENGELLI_UCRETSIZ_DK} dk) - bu ziyaretin borcu silindi, borcsuz cikis ({LoggedZoneName}, Kullanici: {UserSession.UserId})"
+                : borcsuzCikis
                 ? $"Borcsuz cikis - kayit olusturuldu ({LoggedZoneName}, Kullanici: {UserSession.UserId})"
                 : $"Personel bariyeri acti - borclandirilarak cikis yapildi ({LoggedZoneName}, Kullanici: {UserSession.UserId})";
 
@@ -2601,6 +2656,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
 
             try { await LoadParkDataAsync(); } catch { }
+
+            if (engelliUcretsiz && borcsuzCikis)
+                return (true, $"{row.Plate}: Engelli araç ({engelliDk} dk) - ücretsiz çıkış, borç yazılmadı.", true);
 
             return (true, $"{row.Plate}: {borc:0.##} TL BORCLANDIRILARAK cikis yapildi. Borc acik kaldi.", true);
         }
