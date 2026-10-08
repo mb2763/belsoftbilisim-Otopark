@@ -185,6 +185,28 @@ public sealed class AnlikGoruntu
         };
     }
 
+    public sealed class AcikGirisOzet { public string Plaka = ""; public DateTime GirisZamani; }
+
+    /// <summary>
+    /// Önbellekteki TÜM açık girişler (09.10.2026): yanlış okunan / yazılan plakaya benzer
+    /// içerideki aracı bulmak için. Plaka araç kartındaki yazımıyla döner, kart yoksa anahtar.
+    /// </summary>
+    public List<AcikGirisOzet> AcikGirisleriListele()
+    {
+        var liste = new List<AcikGirisOzet>();
+        using var con = _depo.YeniBaglanti();
+        using var cmd = con.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(NULLIF(a.plaka,''), g.plaka_anahtar), g.giris_zamani " +
+                          "FROM anlik_giris g LEFT JOIN anlik_arac a ON a.arac_id = g.arac_id";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            DateTime.TryParse(r.IsDBNull(1) ? "" : r.GetString(1), out var giris);
+            liste.Add(new AcikGirisOzet { Plaka = r.IsDBNull(0) ? "" : r.GetString(0), GirisZamani = giris });
+        }
+        return liste;
+    }
+
     public decimal AcikBorcToplam(string plaka, long? bolgeId = null)
     {
         var pa = PlakaAnahtari(plaka);

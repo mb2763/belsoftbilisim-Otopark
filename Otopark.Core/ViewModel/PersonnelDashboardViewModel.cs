@@ -1551,6 +1551,16 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             var response = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
             if (response?.Result == null)
             {
+                // YANLIS OKUMA KORUMASI (09.10.2026): kayitsiz plaka az once cikan / iceride
+                // duran bir araca cok benziyorsa arac karti ve hayalet giris URETILMEZ.
+                var suphe = BenzerPlakaSuphesi(plate);
+                if (suphe != null)
+                {
+                    ShowToast($"{plate}: kayıtlı değil ve {suphe} plakasına çok benziyor - kamera yanlış okumuş olabilir. " +
+                              "Kayıt oluşturulmadı, bariyer açılmadı. Plakayı kontrol edip doğrusuyla onaylayın.", false);
+                    return;
+                }
+
                 var autoOk = await TryAutoRegisterVehicleAsync(plate);
                 if (!autoOk) { ShowToast($"{plate} otomatik kayit basarisiz.", false); return; }
                 response = await _vehicleDefApi.GetVehicleByPlateAsync(UserSession.CompanyId, plate);
@@ -1684,6 +1694,19 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 }
             }
 
+            // YANLIS OKUMA KORUMASI (09.10.2026): kayitli ama acik girisi olmayan plaka az once
+            // cikan / iceride duran bir araca cok benziyorsa hayalet giris + borc URETILMEZ.
+            if (entryId == 0)
+            {
+                var suphe = BenzerPlakaSuphesi(plate);
+                if (suphe != null)
+                {
+                    ShowToast($"{plate}: giriş kaydı yok ve {suphe} plakasına çok benziyor - kamera yanlış okumuş olabilir. " +
+                              "Kayıt oluşturulmadı, bariyer açılmadı. Plakayı kontrol edip doğrusuyla onaylayın.", false);
+                    return;
+                }
+            }
+
             // ===== ABONELIK KONTROLU ARTIK BURADA (09.09.2026) =====
             //
             // SAHA VAKASI: "girerken abone aracini kamera okumadi, biz de goremedik;
@@ -1807,6 +1830,38 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             decimal zoneDebt = creditInfo.zoneDebt;
             decimal totalDebt = creditInfo.totalDebt;
 
+            // ===== ENGELLI ARAC: 930 DK DOLMADIYSA UCRETSIZ CIKIS (09.10.2026) =====
+            // Kural: EngelliUcretsizPencereAsync. Bariyer artik "Borclu Cikisi Yap"a gerek
+            // kalmadan acilir. Giris zamani KESIN bilinmiyorsa (bugunku listede de onbellekte
+            // de yok) uygulanmaz, eski akis surer.
+            bool engelliUcretsiz = false;
+            if (!aboneMi)
+            {
+                DateTime? engelliGiris = _allVehicles.FirstOrDefault(v => v.EntryId == entryId)?.EntryDateTime;
+                if (engelliGiris == null)
+                {
+                    try
+                    {
+                        var onbellekGiris = OfflineAnlik?.AcikGirisBul(plate);
+                        if (onbellekGiris != null && onbellekGiris.EntryId == entryId)
+                            engelliGiris = onbellekGiris.GirisZamani;
+                    }
+                    catch { /* onbellek okunamazsa kural uygulanmaz */ }
+                }
+
+                if (engelliGiris != null)
+                {
+                    var engelli = await EngelliUcretsizPencereAsync(vehicle, entryId, engelliGiris.Value);
+                    zoneDebt = Math.Max(0m, zoneDebt - engelli.silinenBuBolge);
+                    totalDebt = Math.Max(0m, totalDebt - engelli.silinenBuBolge);
+                    engelliUcretsiz = engelli.ucretsiz;
+                    if (engelli.ucretsiz)
+                        ShowToast($"{plate}: Engelli araç ({engelli.dk} dk) - ücretsiz çıkış, giriş borcu silindi.", true);
+                    else if (engelli.hata != null)
+                        ShowToast($"{plate}: Engelli araç ({engelli.dk} dk) ama giriş borcu silinemedi ({engelli.hata}).", false);
+                }
+            }
+
             // 4b. ABONELIK: yukarida (adim 3'ten ONCE) sorgulandi, burada YALNIZCA
             // KULLANILIR. Sorgu yukari tasindi cunku "girisi yok" dali abonelik
             // sorulmadan borc yazip akisi durduruyordu ve abone arac kapida kaliyordu.
@@ -1815,7 +1870,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             var entryRow = _allVehicles.FirstOrDefault(v => v.EntryId == entryId);
             DateTime entryTs = entryRow?.EntryDateTime ?? DateTime.Now.AddMinutes(-15);
             int extraDays = ComputeOvernightDays(entryTs, DateTime.Now);
-            if (extraDays > 0 && _cachedDailyFee > 0)
+            if (!engelliUcretsiz && extraDays > 0 && _cachedDailyFee > 0)
             {
                 decimal additionalFee = extraDays * _cachedDailyFee;
                 zoneDebt += additionalFee;
@@ -1890,6 +1945,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // Eski borclar SILINMEZ, kapatilmaz; kiosktan odenmeye devam eder.
             // Yalnizca ucretsiz bir konaklamayi rehin almalari engellenir.
             decimal buKonaklamaUcreti = 0m;
+            if (!engelliUcretsiz)
             try
             {
                 buKonaklamaUcreti = (decimal)await _vehicleApi.GetParkPriceAsync(entryId);
@@ -1901,7 +1957,8 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 buKonaklamaUcreti = -1m;
             }
 
-            bool ucretsizCikis = creditInfo.girisBorcu <= 0 && buKonaklamaUcreti == 0m;
+            // Engelli ucretsiz penceresinde giris borcu az once silindi; creditInfo bayat.
+            bool ucretsizCikis = engelliUcretsiz || (creditInfo.girisBorcu <= 0 && buKonaklamaUcreti == 0m);
 
             if (!aboneMi && !washBypass && !ucretsizCikis && zoneDebt > 0)
             {
@@ -2436,6 +2493,113 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     /// <summary>Engelli tarifesinin ucretsiz penceresi (HUNAT: 0-930 dk 0 TL, sonrasi ucretli).</summary>
     private const int ENGELLI_UCRETSIZ_DK = 930;
 
+    /// <summary>
+    /// ENGELLI ARAC UCRETSIZ PENCERE (06.10.2026; 09.10.2026'da kamera cikisina da baglandi).
+    ///
+    /// Saha: "Engelli araca elle cikis verince borca dusuyor, kendi okuyup cikinca
+    /// borclanmiyor." Arac OTOMOBIL olarak girip (taninmayan plaka oto-kayit ya da eski
+    /// kart) iceride ENGELLI yapilinca giriste yazilan 80 TL borc kaliyordu: kamera cikisi
+    /// "giris borcu var" diye bariyeri acmiyor, "Borclu Cikisi Yap" araci BORCLU cikariyordu.
+    ///
+    /// Arac engelliyse ve girisinden 930 dk gecmediyse BU ZIYARETE bagli, hic odenmemis
+    /// borclar silinir; cagiran cikisi borcsuz yapar. Engelli degilse / sure dolduysa
+    /// hicbir sey yapilmaz. Eski ziyaretlerin borcuna dokunulmaz.
+    ///
+    /// Doner: ucretsiz = pencere icinde VE tum borclar silindi; silinenBuBolge = bu bolgeden
+    /// silinen tutar (kismi basarisizlikta da dusulmeli); hata = silinemeyen borcun nedeni
+    /// (sunucu mesai disinda reddedebilir) - o durumda cagiran eski akisla devam eder.
+    /// </summary>
+    private async Task<(bool ucretsiz, decimal silinenBuBolge, int dk, string? hata)> EngelliUcretsizPencereAsync(
+        VewVehicleDefinition vehicle, long entryId, DateTime girisZamani)
+    {
+        int dk = (int)(DateTime.Now - girisZamani).TotalMinutes;
+        if (entryId <= 0 || dk < 0 || dk >= ENGELLI_UCRETSIZ_DK) return (false, 0m, dk, null);
+
+        await EnsureEngelliTipleriAsync();
+        bool engelli = _engelliVehicleTypeIds.Contains(vehicle.VehicleTypeId)
+                       || (vehicle.VehicleTypeName?.Contains("ENGELL", StringComparison.OrdinalIgnoreCase) ?? false);
+        if (!engelli) return (false, 0m, dk, null);
+
+        string? hata = null;
+        decimal silinenBuBolge = 0m;
+        try
+        {
+            var credits = await _vehicleApi.GetVehicleCreditsAsync(vehicle.Id);
+            foreach (var c in credits.Where(c => c.VehicleEntryId == entryId
+                                                 && c.PaidAmount == 0 && c.DebtAmount > 0))
+            {
+                var (ok, silmeHatasi) = await _vehicleApi.DeleteVehicleCreditAsync(c.Id, UserSession.UserId);
+                if (!ok) { hata = silmeHatasi ?? "bilinmeyen hata"; break; }
+                if (c.ZoneId == BolgeId) silinenBuBolge += c.DebtAmount;
+            }
+        }
+        catch (Exception ex) { hata = ex.Message; }
+
+        return (hata == null, silinenBuBolge, dk, hata);
+    }
+
+    /// <summary>Benzer plaka korumasinda izin verilen en fazla karakter farki.</summary>
+    private const int BENZER_PLAKA_AZAMI_FARK = 2;
+
+    /// <summary>Az once cikan aracin yanlis okunmus tekrarini yakalama penceresi (dk).</summary>
+    private const int BENZER_CIKIS_PENCERESI_DK = 10;
+
+    /// <summary>
+    /// YANLIS OKUMA / HAYALET GIRIS KORUMASI (09.10.2026).
+    ///
+    /// Saha: "38ARB760 cikarken sisteme 38ARB76P diye plaka atti; cikan araca bir-iki
+    /// karakter degistirip yeniden giris veriyor." Cikis kamerasi plakayi bir-iki karakter
+    /// yanlis okuyunca (38YY955 -> 30YY955, 38LF813 -> 39LF813) o plaka icin acik giris
+    /// bulunamiyor; akis OTOMOBIL arac karti + 15 dk geriye HAYALET GIRIS + 80 TL borc
+    /// uretiyordu (28.09-08.10 arasi onlarca vaka, cogu gercek cikistan saniyeler once/sonra).
+    ///
+    /// Okunan plakanin KENDI acik girisi yoksa ve az once (10 dk) cikmis ya da iceride
+    /// duran bir aracin plakasiyla en fazla 2 karakter farkliysa yanlis okuma sayilir:
+    /// hicbir kayit uretilmez, bariyer acilmaz, personel uyarilir. Gercek arac genellikle
+    /// bir sonraki okumada dogru plakayla normal cikar. Iceride listesi bugunku satirlar +
+    /// onbellekteki TUM acik girisler (dunden kalanlar dahil).
+    ///
+    /// Doner: suphe aciklamasi ("az once cikan 38YY955 (14:48:54)") ya da null.
+    /// </summary>
+    private string? BenzerPlakaSuphesi(string plate)
+    {
+        var anahtar = PlakaAnahtari(plate);
+        if (anahtar.Length < 4) return null;
+
+        int Fark(string? p) => LevenshteinDistance(PlakaAnahtari(p ?? ""), anahtar);
+
+        var cikan = _allVehicles
+            .Where(v => v.ExitDateTime != null
+                        && (DateTime.Now - v.ExitDateTime.Value).TotalMinutes <= BENZER_CIKIS_PENCERESI_DK
+                        && !PlakaAyniMi(v.Plate, plate))
+            .Select(v => new { Satir = v, Fark = Fark(v.Plate) })
+            .Where(x => x.Fark <= BENZER_PLAKA_AZAMI_FARK)
+            .OrderBy(x => x.Fark).ThenByDescending(x => x.Satir.ExitDateTime)
+            .FirstOrDefault();
+        if (cikan != null)
+            return $"az önce çıkan {cikan.Satir.Plate} ({cikan.Satir.ExitDateTime:HH:mm:ss})";
+
+        var iceride = _allVehicles
+            .Where(v => v.ExitDateTime == null && v.ParkType != "Iptal" && !PlakaAyniMi(v.Plate, plate))
+            .Select(v => new { v.Plate, Giris = v.EntryDateTime })
+            .ToList();
+        try
+        {
+            if (OfflineAnlik != null)
+                iceride.AddRange(OfflineAnlik.AcikGirisleriListele()
+                    .Where(g => !PlakaAyniMi(g.Plaka, plate))
+                    .Select(g => new { Plate = g.Plaka, Giris = g.GirisZamani }));
+        }
+        catch { /* onbellek okunamazsa yalnizca bugunku liste kullanilir */ }
+
+        var benzer = iceride
+            .Select(x => new { x.Plate, x.Giris, Fark = Fark(x.Plate) })
+            .Where(x => x.Fark <= BENZER_PLAKA_AZAMI_FARK)
+            .OrderBy(x => x.Fark).ThenByDescending(x => x.Giris)
+            .FirstOrDefault();
+        return benzer == null ? null : $"içeride duran {benzer.Plate} (giriş {benzer.Giris:dd.MM HH:mm})";
+    }
+
     public async Task<(bool acilsin, string mesaj, bool basarili)> BorcluCikisYapAsync(VehicleRow? row)
     {
         if (OfflineBaglanti != null && OfflineBaglanti.Mod != Otopark.Core.Offline.OfflineMod.Cevrimici)
@@ -2480,52 +2644,22 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             }
 
             // ===== ENGELLI ARAC: 930 DK DOLMADIYSA BORCLANDIRILMAZ (06.10.2026) =====
-            //
-            // Saha: "Engelli araca elle cikis verince borca dusuyor, kendi okuyup cikinca
-            // borclanmiyor." Arac OTOMOBIL olarak girip (taninmayan plaka oto-kayit ya da
-            // eski kart) iceride ENGELLI yapilinca giriste yazilan 80 TL borc kaliyordu;
-            // bariyer acilmiyor, bu buton araci 80 TL BORCLU cikariyordu.
-            //
-            // Engelli tarifesi ilk 930 dk ucretsiz. Sure dolmadiysa BU ZIYARETE bagli, hic
-            // odenmemis borclar silinir ve cikis borcsuz yapilir. Sure dolduysa ya da borc
-            // silinemezse (sunucu mesai disi vb.) eski akis surer. Eski ziyaretlerin borcuna
-            // dokunulmaz.
+            // Kural ve gerekce: EngelliUcretsizPencereAsync. Borc silinemezse eski akis surer.
             bool engelliUcretsiz = false;
             int engelliDk = 0;
             if (row.EntryId > 0 && row.ExitDateTime == null)
             {
-                await EnsureEngelliTipleriAsync();
-                bool engelli = _engelliVehicleTypeIds.Contains(vehicle.VehicleTypeId)
-                               || (vehicle.VehicleTypeName?.Contains("ENGELL", StringComparison.OrdinalIgnoreCase) ?? false);
-                engelliDk = (int)(DateTime.Now - row.EntryDateTime).TotalMinutes;
-
-                if (engelli && engelliDk < ENGELLI_UCRETSIZ_DK)
+                var engelli = await EngelliUcretsizPencereAsync(vehicle, row.EntryId, row.EntryDateTime);
+                engelliDk = engelli.dk;
+                zoneDebt = Math.Max(0m, zoneDebt - engelli.silinenBuBolge);
+                if (engelli.ucretsiz)
                 {
-                    string? silmeHatasi = null;
-                    decimal silinenBuBolge = 0m;
-                    try
-                    {
-                        var credits = await _vehicleApi.GetVehicleCreditsAsync(vehicle.Id);
-                        foreach (var c in credits.Where(c => c.VehicleEntryId == row.EntryId
-                                                             && c.PaidAmount == 0 && c.DebtAmount > 0))
-                        {
-                            var (ok, hata) = await _vehicleApi.DeleteVehicleCreditAsync(c.Id, UserSession.UserId);
-                            if (!ok) { silmeHatasi = hata ?? "bilinmeyen hata"; break; }
-                            if (c.ZoneId == BolgeId) silinenBuBolge += c.DebtAmount;
-                        }
-                    }
-                    catch (Exception exS) { silmeHatasi = exS.Message; }
-
-                    zoneDebt = Math.Max(0m, zoneDebt - silinenBuBolge);
-                    if (silmeHatasi == null)
-                    {
-                        parkUcreti = 0m;          // ucretsiz pencere: cikis kaydina ucret yazilmaz
-                        engelliUcretsiz = true;
-                    }
-                    else
-                    {
-                        ShowToast($"{row.Plate}: Engelli araç ({engelliDk} dk) ama giriş borcu silinemedi ({silmeHatasi}).", false);
-                    }
+                    parkUcreti = 0m;          // ucretsiz pencere: cikis kaydina ucret yazilmaz
+                    engelliUcretsiz = true;
+                }
+                else if (engelli.hata != null)
+                {
+                    ShowToast($"{row.Plate}: Engelli araç ({engelliDk} dk) ama giriş borcu silinemedi ({engelli.hata}).", false);
                 }
             }
 
