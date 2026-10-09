@@ -681,6 +681,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         var plate = EntryDetectedPlate.Trim();
         var photo = _entryPendingPhotoBase64;
 
+        // AG HATASI YEDEGI (09.10.2026): giris kaydi sunucuda olusmadan ag hatasi alinirsa
+        // islem cevrimdisi akisla tamamlanir (bkz. BaglantiDurumu.AgHatasiSonrasiKontrolAsync).
+        bool girisKaydiOlustu = false;
+
         // Son 5 dakikada benzer (Levenshtein <= 2) aktif giris var mi?
         // OCR farkli okumus olabilir (33BAT102 vs 33BT1021 gibi) - duplicate kayit onlenir.
         var recentSimilar = _allVehicles
@@ -869,6 +873,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // arac bariyer onunde bekliyordu ("gec tetik").
             // Artik giris kaydi olustugu ANDA tetik gider; geri kalan islemler
             // (doluluk/abonelik/borc) arkasindan devam eder.
+            girisKaydiOlustu = true;
             BariyeriHemenAc(vehDef?.Plate);
 
             // Plaka okundugunda zaten kaydedilmis snapshot'larin ilk yolunu al
@@ -961,6 +966,14 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (!girisKaydiOlustu && OfflineBaglanti != null &&
+                Otopark.Core.Offline.BaglantiDurumu.AgHatasiMi(ex) &&
+                await OfflineBaglanti.AgHatasiSonrasiKontrolAsync("giriş"))
+            {
+                ShowToast($"{plate}: Sunucuya ulaşılamadı - çevrimdışı moda geçildi, giriş yerel işleniyor.", false);
+                await DoApproveEntryOfflineAsync();
+                return;
+            }
             ShowToast("API Hatasi: " + ex.Message, false);
         }
     }
@@ -1545,6 +1558,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
 
         var plate = ExitDetectedPlate.Trim();
 
+        // AG HATASI YEDEGI (09.10.2026): bariyer acilmadan ag hatasi alinirsa cikis
+        // cevrimdisi akisla tamamlanir (bkz. BaglantiDurumu.AgHatasiSonrasiKontrolAsync).
+        bool cevrimdisiYedekUygun = true;
+
         try
         {
             // 1. Plaka kayitli mi? Degilse otomatik kayit yap.
@@ -1820,6 +1837,13 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // gerekirse "Borclu Cikisi Yap" ile bilincli olarak cikarabilir.
             if (!creditInfo.basarili)
             {
+                // Sunucu gercekten erisilemiyorsa cevrimdisina gecilir ve cikis yerel kurallarla yapilir.
+                if (OfflineBaglanti != null && await OfflineBaglanti.AgHatasiSonrasiKontrolAsync("çıkış borç sorgusu"))
+                {
+                    ShowToast($"{plate}: Sunucuya ulaşılamadı - çevrimdışı moda geçildi, çıkış yerel işleniyor.", false);
+                    await DoApproveExitOfflineAsync();
+                    return;
+                }
                 ShowToast(
                     $"{plate}: Borç bilgisi alınamadı (sunucuya ulaşılamıyor). " +
                     "Güvenlik gereği çıkış yapılmadı. Bağlantıyı kontrol edin.",
@@ -2010,6 +2034,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             // SESSIZ GECILMEZ: personele kirmizi uyari cikar ve kurtarma notu
             // yazilir; boylece vaka kaybolmaz, elle duzeltilebilir.
             bool bariyerAcildi = false;
+            cevrimdisiYedekUygun = false;   // bundan sonra kayit/bariyer sunucu akisina aittir
             if (OnOpenExitGateRequested != null)
             {
                 await OnOpenExitGateRequested.Invoke(plate);
@@ -2214,6 +2239,14 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (cevrimdisiYedekUygun && OfflineBaglanti != null &&
+                Otopark.Core.Offline.BaglantiDurumu.AgHatasiMi(ex) &&
+                await OfflineBaglanti.AgHatasiSonrasiKontrolAsync("çıkış"))
+            {
+                ShowToast($"{plate}: Sunucuya ulaşılamadı - çevrimdışı moda geçildi, çıkış yerel işleniyor.", false);
+                await DoApproveExitOfflineAsync();
+                return;
+            }
             ShowToast("API Hatasi: " + ex.Message, false);
         }
     }
@@ -2242,6 +2275,30 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         var row = _allVehicles.FirstOrDefault(v =>
             PlakaAyniMi(v.Plate, plate) && v.ExitDateTime == null && v.ParkType != "Iptal");
 
+        // ONBELLEK YEDEGI (09.10.2026): ekrandaki liste YALNIZCA BUGUNUN girislerini tutar;
+        // dunden kalan (gece yatan) arac listede yoktu ve cevrimdisi cikisi HIC yapilamiyordu.
+        // Sunucudan en son cekilen anlik goruntu bolgedeki TUM acik girisleri icerir.
+        bool misafir = false;
+        if (row == null)
+        {
+            Otopark.Core.Offline.AnlikGoruntu.AcikGirisSonuc? acik = null;
+            try { acik = anlik?.AcikGirisBul(plate); } catch { /* onbellek okunamazsa eski davranis */ }
+            if (acik != null)
+            {
+                row = new VehicleRow
+                {
+                    EntryId = acik.EntryId,
+                    Plate = plate,
+                    ParkingName = LoggedZoneName,
+                    ParkType = "Giris",
+                    EntryDateTime = acik.GirisZamani,
+                    VehicleTypeId = acik.AracTipiId,
+                    EntryType = "N"
+                };
+                misafir = acik.Misafir;
+            }
+        }
+
         if (row == null)
         {
             ShowToast($"[ÇEVRİMDIŞI] {plate}: Giriş kaydı bulunamadı. Bariyer açılmadı — " +
@@ -2269,21 +2326,24 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             decimal buKonaklama = row.EntryId <= 0 ? yerelUcret : 0m;
             decimal toplamBorc = eskiBorc + buKonaklama;
 
-            bool ucretsizCikis = aboneMi || toplamBorc <= 0;
+            bool ucretsizCikis = aboneMi || misafir || toplamBorc <= 0;
 
-            if (!ucretsizCikis)
-            {
-                ShowToast($"[ÇEVRİMDIŞI] {plate}: {toplamBorc:0.##} TL borç var, bağlantı yokken tahsil edilemez. " +
-                          "Kiosk erişilebilirse oradan ödeme alın; aksi halde \"Borçlu Çıkış\" ile bilerek çıkarın.", false);
-                return;
-            }
-
+            // BORC GORUNEN ARAC DA CIKAR, BORCLU KAYDEDILIR (09.10.2026 - kullanici karari).
+            // Cevrimdisiyken borc DOGRULANAMAZ: kioskta odeyen aracin borcu onbellekte hala
+            // acik gorunuyor, kioskun cevrimdisi odemesi de masaustune ulasmiyor. Onceden
+            // bu araclarin hepsi bariyerde kaliyordu ("offline bariyer acma calismiyor").
+            // Artik bariyer acilir ve cikis BORCLU olarak kuyruga yazilir; baglanti gelince
+            // sunucuda islenir: borc kioskta odenmisse zaten kapalidir, odenmemisse aracin
+            // hesabinda kalir ve sonraki geliste tahsil edilir.
             var govde = new Otopark.Core.Offline.OfflineKapaliCikisGovdesi
             {
                 EntryId = row.EntryId > 0 ? row.EntryId : null,
-                UcretsizCikis = true,
-                Neden = aboneMi ? "ABONE" : "UCRETSIZ",
-                YerelUcret = yerelUcret
+                UcretsizCikis = ucretsizCikis,
+                Neden = ucretsizCikis ? (aboneMi ? "ABONE" : "UCRETSIZ") : "BORCLU",
+                YerelUcret = yerelUcret,
+                PersonelAciklama = ucretsizCikis
+                    ? null
+                    : $"[ÇEVRİMDIŞI] Otomatik borçlu çıkış - bağlantı yokken borç doğrulanamadı ({toplamBorc:0.##} TL göründü, {LoggedZoneName}, Kullanıcı: {UserSession.UserId})"
             };
 
             OfflineKuyruk.Ekle("KAPALI_CIKIS", plate, UserSession.CompanyId, BolgeId, UserSession.UserId,
@@ -2300,7 +2360,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             UpdateParkCounts();
             ApplyFiltersInternal();
 
-            ShowToast($"[ÇEVRİMDIŞI] {plate} çıkışı yerel kaydedildi, bariyer açıldı.", true);
+            ShowToast(ucretsizCikis
+                ? $"[ÇEVRİMDIŞI] {plate} çıkışı yerel kaydedildi, bariyer açıldı."
+                : $"[ÇEVRİMDIŞI] {plate}: {toplamBorc:0.##} TL borç doğrulanamadı - BORÇLU çıkış yerel kaydedildi, bariyer açıldı.", ucretsizCikis);
             ExitDetectedPlate = "";
         }
         catch (Exception ex)

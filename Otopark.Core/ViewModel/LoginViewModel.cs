@@ -110,9 +110,13 @@ public partial class LoginViewModel : ObservableObject
                 ZoneId = SelectedZone?.Id ?? 0,
                 LoginType = 0
             });
-            var httpClient = new HttpClient()
+            // ZAMAN ASIMLARI (09.10.2026): varsayilan 100 sn idi; baglanti kopunca her giris/cikis
+            // istegi bariyerde 100 sn bekliyor, cevrimdisi yedege (BaglantiDurumu.AgHatasiSonrasiKontrolAsync)
+            // gec dusuluyordu. Baglanti kurulamazsa 5 sn'de, yanit gelmezse 30 sn'de vazgecilir.
+            var httpClient = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(5) })
             {
-                BaseAddress = new Uri("http://web.belsoft.com.tr:221/")
+                BaseAddress = new Uri("http://web.belsoft.com.tr:221/"),
+                Timeout = TimeSpan.FromSeconds(30)
             };
             var vehicleApi = new VehicleParkApiService(httpClient);
             var vehicleDefApi = new VehicleDefinitionApiService(httpClient);

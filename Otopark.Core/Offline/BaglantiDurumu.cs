@@ -85,6 +85,45 @@ public sealed class BaglantiDurumu
         }
     }
 
+    /// <summary>
+    /// İŞ ÇAĞRISI AĞ HATASI (09.10.2026). Saha: "offline bariyer açma çalışmıyor."
+    ///
+    /// Nabız çevrimiçiyken 60 sn'de bir atılıyor ve 3 ardışık hata isteniyordu: bağlantı
+    /// koptuğunda çevrimdışına geçiş 2-3,5 dk sürüyor, bu sürede her giriş/çıkış sunucuyu
+    /// bekleyip "API hatası / borç bilgisi alınamadı" ile duruyor, bariyer açılmıyordu.
+    /// Kısa kesintilerde çevrimdışı mod HİÇ devreye girmiyordu.
+    ///
+    /// Artık bir iş çağrısı ağ hatası alınca çağıran bunu bildirir: HEMEN tek bir nabız
+    /// denenir; o da ulaşamazsa beklemeden çevrimdışına geçilir ve çağıran işlemi yerel
+    /// akışla tamamlar. Sunucu cevap veriyorsa (hata başka nedenliyse) mod DEĞİŞMEZ.
+    /// OfflineIzinli=false ise (K10) hiç geçilmez. Döner: şu an çevrimdışı/senkron mu.
+    /// </summary>
+    public async Task<bool> AgHatasiSonrasiKontrolAsync(string kaynak)
+    {
+        if (Mod != OfflineMod.Cevrimici) return true;
+        if (!_offlineIzinli) return false;
+
+        bool erisilebilir;
+        try { erisilebilir = await _client.ErisilebilirMiAsync(_nabizBilgisiUret()); }
+        catch { erisilebilir = false; }
+        if (erisilebilir) return false;
+
+        if (Mod == OfflineMod.Cevrimici)
+            GecisYap(OfflineMod.Cevrimdisi, $"İş çağrısı ağ hatası ({kaynak}) + anlık nabız başarısız; çevrimdışı moda geçildi.");
+        return true;
+    }
+
+    /// <summary>İstisna (ya da iç istisnası) bir AĞ hatası mı: zaman aşımı, bağlantı reddi, DNS.</summary>
+    public static bool AgHatasiMi(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is System.Net.Http.HttpRequestException || e is TaskCanceledException ||
+                e is OperationCanceledException || e is System.Net.Sockets.SocketException ||
+                e is TimeoutException)
+                return true;
+        return false;
+    }
+
     /// <summary>Senkron tamamlanınca (kuyruk boş) çağrılır; Çevrimiçi'ye döner.</summary>
     public void SenkronTamamlandi()
     {
