@@ -90,10 +90,14 @@
                         </StackPanel>
                     </Border>
 
-                    <Button Content="Kara Liste"
-                            MinWidth="90" Height="36" Margin="3" FontSize="11"
-                            Background="White" BorderBrush="#DDE3EE"
-                            VerticalAlignment="Center"/>
+                    <!-- KARA LISTE (11.10.2026): secili araci (odemeden arkadan cikan) kara listeye ekler.
+                         Arac borcunu odeyene kadar hicbir kapali otoparka giremez. -->
+                    <Button Content="Kara Listeye Ekle"
+                            MinWidth="110" Height="36" Margin="3" FontSize="11" FontWeight="Bold"
+                            Background="#111827" Foreground="White" BorderBrush="#111827"
+                            VerticalAlignment="Center"
+                            ToolTip="Seçili aracı kara listeye ekler: borcunu ödeyene kadar hiçbir kapalı otoparka giremez"
+                            Click="KaraListeyeEkle_Click"/>
 
                     <Button Content="Borc Kontrol"
                             MinWidth="90" Height="36" Margin="3" FontSize="11"
@@ -702,6 +706,36 @@
                        FontSize="14"
                        FontWeight="SemiBold"
                        HorizontalAlignment="Center"/>
+        </Border>
+
+        <!-- ARKADAN CIKIS SUPHESI (11.10.2026): bariyer baska plakaya acildiktan hemen sonra borclu
+             plaka okundu. Personel kamerayi kontrol edip tek tusla kara listeye ekler ya da yoksayar.
+             Serit kendiliginden kaybolmaz (karar beklenir). -->
+        <Border HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,78,0,0"
+                Padding="16,10"
+                CornerRadius="10"
+                MaxWidth="1100"
+                Background="#7F1D1D"
+                BorderBrush="#FCA5A5" BorderThickness="2"
+                Visibility="{Binding ArkadanCikisSupheVar, Converter={StaticResource BoolToVis}}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="14" Opacity="0.35" ShadowDepth="3"/>
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding ArkadanCikisSupheMetni}"
+                           Foreground="White" FontSize="15" FontWeight="Bold"
+                           TextWrapping="Wrap" MaxWidth="760" VerticalAlignment="Center"/>
+                <Button Content="Kara Listeye Ekle" Margin="14,0,0,0" Padding="14,8"
+                        FontSize="13" FontWeight="Bold" Cursor="Hand"
+                        Background="#111827" Foreground="White" BorderBrush="#FCA5A5"
+                        Command="{Binding SupheyiKaraListeyeEkleCommand}"/>
+                <Button Content="Yoksay" Margin="8,0,0,0" Padding="14,8"
+                        FontSize="13" Cursor="Hand"
+                        Background="#F3F4F6" Foreground="#111827" BorderThickness="0"
+                        Command="{Binding SupheyiYoksayCommand}"/>
+            </StackPanel>
         </Border>
 
     </Grid>

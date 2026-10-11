@@ -153,6 +153,9 @@ namespace Otopark.Client.Views
                         // cikarken ERKEN okunuyor, cikis o anda isleniyor ve bekleme
                         // sayaci tukeniyor. Arac bariyere geldiginde ikinci okuma
                         // "sure yutuldu" ile dusuyor, bariyer ACILMIYORDU.
+                        // KARA LISTE (11.10.2026): "arkadan cikis" suphesi icin bariyerin hangi plakaya
+                        // acildigi bilinmeli; komuttan HEMEN ONCE isaretlenir.
+                        Dispatcher.Invoke(() => vm.CikisBariyeriAcildi(plaka));
                         var r = await Services.BarrierService.OpenExitGateAsync(plaka, beklemeyiAtla: true);
                         Dispatcher.Invoke(() => vm.ShowBarrierToast(r.Success, r.Message));
                     };
@@ -1080,6 +1083,29 @@ namespace Otopark.Client.Views
         /// VEHICLE_PLATE_REVISION'a "MISAFIR" olarak loglanir ve web'deki
         /// "Iptal / Plaka Islem Raporu" ekraninda listelenir.
         /// </summary>
+        /// <summary>
+        /// KARA LISTEYE EKLE (11.10.2026): secili araci (odemeden arkadan cikan) kara listeye ekler.
+        /// Arac borcunu odeyene kadar hicbir kapali otoparka giremez; acik girisi borclu cikisla kapanir.
+        /// </summary>
+        private async void KaraListeyeEkle_Click(object sender, RoutedEventArgs e)
+        {
+            if (DataContext is not PersonnelDashboardViewModel vm) return;
+
+            if (vm.SelectedVehicle == null || string.IsNullOrWhiteSpace(vm.SelectedVehicle.Plate))
+            {
+                vm.ShowBarrierToast(false, "Once listeden araci seciniz.");
+                return;
+            }
+
+            var pencere = new KaraListeWindow(vm.SelectedVehicle.Plate, "Odeme yapmadan arkadan cikis")
+            {
+                Owner = Window.GetWindow(this)
+            };
+            if (pencere.ShowDialog() != true) return;
+
+            await vm.SeciliAraciKaraListeyeEkleAsync(pencere.Note);
+        }
+
         private async void MisafirArac_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is not PersonnelDashboardViewModel vm) return;
@@ -1128,6 +1154,8 @@ namespace Otopark.Client.Views
             // Kayit ureterek cikarmak icin "Borclu Cikisi Yap" (BorcluCikis_Click)
             // kullanilmalidir: borc yazilir, cikis islenir, bariyer yine acilir.
 
+            // KARA LISTE (11.10.2026): elle acilan bariyerin arkasindan cikan borclu arac da yakalansin.
+            if (DataContext is PersonnelDashboardViewModel vmK) vmK.CikisBariyeriAcildi(null);
             var result = await Services.BarrierService.OpenExitGateAsync(beklemeyiAtla: true);
             if (DataContext is PersonnelDashboardViewModel vm3)
             {

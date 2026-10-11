@@ -241,6 +241,7 @@ public partial class PersonnelDashboardViewModel : ObservableObject
         // Sure timer - her saniye guncelle
         StartDurationTimer();
         StartBarrierCommandPoll();   // madde 3: web'den gelen bariyer komutlari
+        StartKaraListeYenileme();    // 11.10.2026: kapali otopark kara listesi onbellegi
     }
 
     private async void StartDurationTimer()
@@ -485,6 +486,15 @@ public partial class PersonnelDashboardViewModel : ObservableObject
     {
         try
         {
+            // 11.10.2026: once gercek KARA LISTE (firma geneli, odemeden cikanlar). Sunucu eski
+            // surumse (uc yok) asagidaki eski "bolge borclulari" gorunumune dusulur.
+            if (await KaraListeSekmesiYukleAsync())
+            {
+                UpdateParkCounts();
+                ApplyFiltersInternal();
+                return;
+            }
+
             var debtors = await _parkQuery.GetZoneDebtorsAsync(UserSession.CompanyId, BolgeId);
 
             _allVehicles.Clear();
@@ -701,6 +711,10 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             ShowToast($"Bu arac zaten icerde: {recentSimilar.Row.Plate} ({dk} dk once giris yapti).", false);
             return;
         }
+
+        // KARA LISTE (11.10.2026): odemeden arkadan cikan arac borcunu odeyene kadar HICBIR
+        // kapali otoparka giremez; bariyer acilmaz. Onbellekte olmayan plakada sunucuya gidilmez.
+        if (await KaraListeGirisEngelliAsync(plate)) return;
 
         // ===== KAPASITE KONTROLU =====
         // Otopark DOLU ise (icerideki arac sayisi >= kapasite) yalnizca ABONE araclar girebilir.
@@ -1012,6 +1026,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
             ShowToast($"[ÇEVRİMDIŞI] Bu araç zaten içerde: {recentSimilar.Row.Plate} ({dk} dk önce giriş yaptı).", false);
             return;
         }
+
+        // KARA LISTE (11.10.2026): baglanti yokken son bilinen listeye gore.
+        if (KaraListeOnbellekEngelli(plate)) return;
 
         if (TotalCapacity > 0 && CurrentVehicleCount >= TotalCapacity)
         {
@@ -1990,6 +2007,9 @@ public partial class PersonnelDashboardViewModel : ObservableObject
                 if (totalDebt > zoneDebt)
                     msg += $" (Tum bolgelerdeki toplam borc: {totalDebt:F2} TL)";
                 ShowToast(msg, false);
+                // KARA LISTE (11.10.2026): bariyer az once baska plakaya acildiysa bu arac
+                // acik bariyerden gecmis olabilir -> personele "arkadan cikis suphesi" seridi.
+                ArkadanCikisSupheKontrol(plate, entryId, vehicle.Id, zoneDebt);
                 return;
             }
 
